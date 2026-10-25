@@ -1,0 +1,1492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Safelight</title>
+<meta name="description" content="Photo editor for a consistent Instagram feed: your exact colors, every photo.">
+<meta name="theme-color" content="#121212">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Safelight">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<script src="/vendor/jszip.min.js" defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one-screen darkroom app — photo stage on top, film strip, tool tabs and panel below; side-by-side on wide screens.
+   Neutral greys on purpose so the UI never tints how you judge color; one safelight-amber accent. */
+:root{
+  --bg:#121212; --surface:#1b1b1b; --raised:#242424; --line:#303030;
+  --fg:#ecebe8; --muted:#8d8c88; --accent:#f2a04e; --accent-ink:#1a1206; --danger:#e5674f;
+  --f-display:"Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --f-body:"Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme:dark;
+}
+html{height:100%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);background:var(--bg)}
+body{height:100%;margin:0}
+img{max-width:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:14px;overflow:hidden;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{height:100%;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto auto 250px;gap:10px;padding-block:10px;max-width:1400px;margin:0 auto}
+@media (min-width:900px){
+  .app{grid-template-columns:minmax(0,1fr) 380px;grid-template-rows:auto minmax(0,1fr) auto;column-gap:20px}
+  header{grid-column:1/-1}
+  .stage{grid-column:1;grid-row:2}
+  .strip{grid-column:1;grid-row:3}
+  .tools{grid-column:2;grid-row:2/4;display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0}
+}
+.tools{display:contents}
+@media (min-width:900px){.tools{display:grid}}
+
+header{display:flex;align-items:center;gap:8px}
+@media (max-width:480px){.wide{display:none}header .btn{padding:7px 11px}.seg button{padding:6px 10px}.brand{font-size:18px}}
+.brand{font-family:var(--f-display);font-weight:700;font-size:20px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;margin-right:auto}
+.brand i{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 14px var(--accent)}
+.seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:3px}
+.seg button{border:0;background:none;padding:6px 12px;border-radius:999px;color:var(--muted);font-weight:500}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--fg)}
+.btn{border:1px solid var(--line);background:var(--surface);padding:8px 14px;border-radius:10px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.ghost{background:none}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.small{padding:6px 10px;font-size:13px}
+
+.stage{position:relative;min-height:0;border-radius:12px;background:#0c0c0c;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+.stage canvas.main{position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;width:auto;height:auto}
+.badge{position:absolute;left:10px;top:10px;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;background:rgba(0,0,0,.6);color:#fff;padding:4px 8px;border-radius:6px}
+.hint{position:absolute;right:10px;bottom:10px;font-size:12px;color:#cfcfcf;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:6px}
+.feed{position:absolute;inset:0;overflow:auto;padding:10px;background:var(--bg);touch-action:pan-y}
+.feed-inner{max-width:520px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr);gap:2px}
+.feed-inner button{border:0;padding:0;background:#000;aspect-ratio:3/4;overflow:hidden;display:block;max-width:100%}
+.feed-inner canvas{width:100%;height:100%;object-fit:cover;display:block}
+.feed-note{max-width:520px;margin:0 auto 10px;color:var(--muted);font-size:13px;line-height:1.45}
+
+.strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.thumb{position:relative;flex:0 0 auto;width:56px;height:70px;border-radius:8px;overflow:hidden;border:2px solid transparent;padding:0;background:#000}
+.thumb canvas{width:100%;height:100%;object-fit:cover;display:block}
+.thumb[aria-current="true"]{border-color:var(--accent)}
+.thumb .x{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.7);color:#fff;font-size:13px;line-height:20px;text-align:center}
+.thumb.add{border:1px dashed var(--line);background:var(--surface);color:var(--muted);font-size:24px;display:grid;place-items:center}
+
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs button{border:0;background:none;padding:10px 10px;color:var(--muted);font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--fg);border-color:var(--accent)}
+.panel{overflow-y:auto;min-height:0;padding:12px 2px 24px}
+.sec{display:grid;gap:12px;margin-bottom:22px}
+.sec h3{margin:0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.note{color:var(--muted);font-size:13px;line-height:1.5;margin:0;max-width:60ch}
+.note b{color:var(--fg);font-weight:600}
+
+.srow{display:grid;gap:4px}
+.shead{display:flex;justify-content:space-between;align-items:baseline}
+.shead label{font-weight:500}
+.val{font-family:var(--f-mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.val.on{color:var(--accent)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:28px;background:none;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:var(--track,var(--line))}
+input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:var(--track,var(--line))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:var(--fg);margin-top:-8px;border:3px solid var(--bg)}
+input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--fg);border:3px solid var(--bg)}
+input[type=range]:disabled{opacity:.35}
+
+.presets{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px}
+.preset{flex:0 0 auto;width:78px;border:0;background:none;padding:0;text-align:left;display:grid;gap:4px}
+.preset canvas{width:78px;height:98px;object-fit:cover;border-radius:8px;border:2px solid transparent;display:block;background:#000}
+.preset[aria-pressed="true"] canvas{border-color:var(--accent)}
+.preset .code{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.preset .nm{font-size:13px;font-weight:600;line-height:1.1}
+.preset[aria-pressed="true"] .code{color:var(--accent)}
+
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 14px;font-weight:500}
+.chip[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.ref{display:flex;gap:12px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.ref img{width:52px;height:65px;object-fit:cover;border-radius:6px;flex:0 0 auto}
+.ref div{min-width:0;flex:1}
+.ref strong{display:block}
+.check{display:flex;align-items:center;gap:8px}
+.check input{accent-color:var(--accent);width:18px;height:18px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.field{flex:1 1 0;min-width:0;width:100%;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.recipe{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.recipe .meta{flex:1;min-width:0}
+.recipe .meta strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recipe .meta span{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+
+.sheet-wrap{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;align-items:end;justify-items:center;z-index:20;padding:0 max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+@media (min-width:700px){.sheet-wrap{align-items:center}}
+.sheet{width:100%;max-width:440px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;display:grid;gap:14px;max-height:90%;overflow:auto}
+.sheet h2{margin:0;font-family:var(--f-display);font-size:20px}
+.sheet .stack{display:grid;gap:8px}
+.sheet .stack .btn{justify-content:center;padding:12px}
+.sheet img.fallback{width:100%;border-radius:8px}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--raised);border:1px solid var(--line);padding:10px 16px;border-radius:10px;z-index:30;max-width:calc(100% - 32px);text-align:center}
+@media (prefers-reduced-motion:no-preference){.toast{animation:pop .18s ease-out}@keyframes pop{from{transform:translate(-50%,8px);opacity:0}}}
+.tapbar{position:absolute;left:10px;right:10px;top:10px;display:flex;align-items:center;gap:10px;background:var(--accent);color:var(--accent-ink);padding:8px 8px 8px 14px;border-radius:10px;font-weight:600;z-index:3}
+.tapbar span{flex:1;min-width:0}
+.tapbar button{border:0;background:rgba(0,0,0,.18);color:inherit;padding:6px 12px;border-radius:8px;font-weight:600}
+.stage.tapping canvas.main{cursor:crosshair}
+.markers{position:absolute;inset:0;pointer-events:none}
+.mk{position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1.5px rgba(0,0,0,.6),inset 0 0 0 1.5px rgba(0,0,0,.6)}
+.ccard{border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:10px;background:var(--surface)}
+.ccard.off{opacity:.55}
+.chead{display:flex;gap:8px;align-items:center}
+.chead input[type=color]{width:42px;height:42px;border:0;padding:0;background:none;flex:0 0 auto;cursor:pointer}
+.chead input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+.chead input[type=color]::-webkit-color-swatch{border:1px solid rgba(255,255,255,.18);border-radius:9px}
+.chead input[type=color]::-moz-color-swatch{border:1px solid rgba(255,255,255,.18);border-radius:9px}
+.field.hex{flex:0 0 92px;font-family:var(--f-mono);font-size:13px;text-transform:uppercase}
+.status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);flex-wrap:wrap}
+.sw{width:22px;height:22px;border-radius:6px;border:1px solid rgba(255,255,255,.18);flex:0 0 auto}
+.sw.empty{background:repeating-linear-gradient(45deg,#2a2a2a 0 4px,#1f1f1f 4px 8px)}
+.pill{font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;padding:3px 8px;border-radius:999px;border:1px solid var(--line)}
+.pill.ok{color:#9bd38a;border-color:#3d5a35}
+.pill.warn{color:var(--accent);border-color:#6a4a26}
+details.more summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:500;list-style:none}
+details.more summary::before{content:"+ ";}
+details.more[open] summary::before{content:"\2212  ";}
+details.more[open]{display:grid;gap:12px}
+.stage canvas.ov{pointer-events:none}
+.stage.painting{cursor:crosshair}
+.toolseg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.toolseg button{flex:1;border:0;background:none;padding:8px;border-radius:7px;color:var(--muted);font-weight:600}
+.toolseg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.tstrip{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px}
+.tstep{flex:0 0 auto;border:0;background:none;padding:0;display:grid;gap:3px;justify-items:center;color:var(--muted);font-family:var(--f-mono);font-size:11px}
+.tstep canvas{width:46px;height:58px;object-fit:cover;border-radius:6px;border:2px solid transparent;display:block;background:#000}
+.tstep[aria-current="true"]{color:var(--accent)}
+.tstep[aria-current="true"] canvas{border-color:var(--accent)}
+select.field{appearance:auto}
+.steps{margin:0;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.55;display:grid;gap:2px}
+.steps b{color:var(--fg)}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <div class="brand"><i aria-hidden="true"></i>Safelight</div>
+    <div class="seg" role="group" aria-label="View">
+      <button id="vEdit" aria-pressed="true">Edit</button>
+      <button id="vFeed" aria-pressed="false">Feed</button>
+    </div>
+    <label class="btn" for="fileIn">Add<span class="wide">&nbsp;photos</span></label>
+    <input id="fileIn" type="file" accept="image/*" multiple hidden>
+    <button class="btn primary" id="saveBtn">Save</button>
+  </header>
+
+  <div class="stage" id="stage">
+    <canvas class="main" id="main" width="1080" height="1350" aria-label="Photo preview"></canvas>
+    <canvas class="main ov" id="ov" width="1080" height="1350" hidden></canvas>
+    <span class="badge" id="badge" hidden>Original</span>
+    <span class="hint" id="hint">Hold to see original</span>
+    <div class="markers" id="markers"></div>
+    <div class="tapbar" id="tapbar" hidden><span id="tapText"></span><button id="tapCancel">Cancel</button></div>
+    <div class="feed" id="feed" hidden>
+      <p class="feed-note">Your grid with the current recipe. Keep adjusting below and every tile updates.</p>
+      <div class="feed-inner" id="feedGrid"></div>
+    </div>
+  </div>
+
+  <div class="strip" id="strip" aria-label="Photos"></div>
+
+  <div class="tools">
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="panel" id="panel" role="tabpanel"></div>
+  </div>
+</div>
+
+<div class="sheet-wrap" id="sheet" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+/* ---------- helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === false || v == null) continue;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = v;
+    else if (k === "value") el.value = v;
+    else if (k === "checked") el.checked = !!v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) { if (kid == null || kid === false) continue; el.append(kid.nodeType ? kid : document.createTextNode(kid)); }
+  return el;
+}
+const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+const ss = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const signed = v => (v > 0 ? "+" : "") + v;
+const uid = () => "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const PI2 = Math.PI * 2;
+const wrap = d => d > Math.PI ? d - PI2 : d < -Math.PI ? d + PI2 : d;
+let toastT;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2800); }
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+};
+
+/* ---------- color science (OKLab, so hue and lightness move independently) ---------- */
+const TO_LIN = new Float32Array(4096), GN = 16383, TO_GAM = new Float32Array(GN + 1);
+for (let i = 0; i < 4096; i++) TO_LIN[i] = Math.pow(i / 4095, 2.2);
+for (let i = 0; i <= GN; i++) TO_GAM[i] = Math.pow(i / GN, 1 / 2.2);
+const LAB = new Float32Array(3), RGB = new Float32Array(3);
+function rgb2lab(r, g, b) {
+  r = TO_LIN[r <= 0 ? 0 : r >= 1 ? 4095 : (r * 4095) | 0];
+  g = TO_LIN[g <= 0 ? 0 : g >= 1 ? 4095 : (g * 4095) | 0];
+  b = TO_LIN[b <= 0 ? 0 : b >= 1 ? 4095 : (b * 4095) | 0];
+  const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
+  const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
+  const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
+  LAB[0] = .2104542553 * l + .7936177850 * m - .0040720468 * s;
+  LAB[1] = 1.9779984951 * l - 2.4285922050 * m + .4505937099 * s;
+  LAB[2] = .0259040371 * l + .7827717662 * m - .8086757660 * s;
+}
+function lab2rgb(L, A, B) {
+  let l = L + .3963377774 * A + .2158037573 * B, m = L - .1055613458 * A - .0638541728 * B, s = L - .0894841775 * A - 1.2914855480 * B;
+  l = l * l * l; m = m * m * m; s = s * s * s;
+  const r = 4.0767416621 * l - 3.3077115913 * m + .2309699292 * s;
+  const g = -1.2684380046 * l + 2.6097574011 * m - .3413193965 * s;
+  const b = -.0041960863 * l - .7034186147 * m + 1.7076147010 * s;
+  RGB[0] = TO_GAM[r <= 0 ? 0 : r >= 1 ? GN : (r * GN) | 0];
+  RGB[1] = TO_GAM[g <= 0 ? 0 : g >= 1 ? GN : (g * GN) | 0];
+  RGB[2] = TO_GAM[b <= 0 ? 0 : b >= 1 ? GN : (b * GN) | 0];
+}
+const LABCACHE = {};
+function hexLab(hex) {
+  if (LABCACHE[hex]) return LABCACHE[hex];
+  const n = parseInt(hex.slice(1), 16);
+  rgb2lab(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
+  const L = LAB[0], A = LAB[1], B = LAB[2];
+  return LABCACHE[hex] = { L, A, B, C: Math.hypot(A, B), h: Math.atan2(B, A) };
+}
+const toHex = (r, g, b) => "#" + [r, g, b].map(v => Math.round(clamp01(v) * 255).toString(16).padStart(2, "0")).join("");
+function labHex(L, A, B) { lab2rgb(L, A, B); return toHex(RGB[0], RGB[1], RGB[2]); }
+
+/* ---------- looks ---------- */
+const ZERO = { exposure:0, contrast:0, highlights:0, shadows:0, fade:0, temp:0, tint:0, saturation:0, vibrance:0, shAmt:0, shHue:30, hiAmt:0, hiHue:45, grain:0, vignette:0,
+  skinTone:0, skinSat:0, skinBright:0, skinProtect:0 };
+// How skin-like a color is (OKLab): warm hues around 57°, moderate saturation, not too dark.
+function skinWeight(L, a, b) {
+  const C = Math.sqrt(a * a + b * b); if (C < .02 || L < .14) return 0;
+  const z = wrap(Math.atan2(b, a) - 1.0) / .3; if (z > 2.5 || z < -2.5) return 0;
+  return Math.exp(-z * z) * ss(.02, .045, C) * (1 - ss(.15, .21, C)) * ss(.14, .26, L) * (1 - ss(.93, .99, L));
+}
+const PRESETS = [
+  { id:"none",  code:"N0", name:"Natural", p:{} },
+  { id:"peri",  code:"B1", name:"Periwinkle", p:{ contrast:5, highlights:-15, shadows:10, fade:18, temp:-6, saturation:-22, vibrance:-5, shAmt:10, shHue:220, grain:18, skinProtect:30 } },
+  { id:"linen", code:"L1", name:"Linen",  p:{ exposure:12, contrast:-15, highlights:-20, shadows:25, fade:25, temp:5, saturation:-10, vibrance:10, hiAmt:15, hiHue:45 } },
+  { id:"honey", code:"H2", name:"Honey",  p:{ exposure:5, contrast:10, temp:28, tint:5, saturation:5, shAmt:15, shHue:30, hiAmt:20, hiHue:45, fade:10, grain:15 } },
+  { id:"fern",  code:"F3", name:"Fern",   p:{ contrast:15, highlights:-25, shadows:10, temp:-5, tint:-10, saturation:-20, shAmt:25, shHue:170, fade:15, grain:10 } },
+  { id:"slate", code:"S4", name:"Slate",  p:{ contrast:-10, highlights:-15, temp:-20, saturation:-25, fade:30, shAmt:20, shHue:210 } },
+  { id:"ember", code:"E5", name:"Ember",  p:{ contrast:30, temp:15, saturation:15, vibrance:10, shAmt:10, shHue:15, hiAmt:10, hiHue:40, vignette:20, grain:20 } },
+  { id:"dusk",  code:"D6", name:"Dusk",   p:{ exposure:5, contrast:-5, temp:5, tint:15, fade:20, saturation:-10, shAmt:15, shHue:260, hiAmt:20, hiHue:330 } },
+  { id:"tide",  code:"T7", name:"Tide",   p:{ contrast:15, saturation:-5, vibrance:15, shAmt:30, shHue:190, hiAmt:25, hiHue:30 } },
+  { id:"mono",  code:"M8", name:"Mono",   p:{ saturation:-100, contrast:25, fade:10, grain:25 } },
+  { id:"ash",   code:"A9", name:"Ash",    p:{ saturation:-100, contrast:-10, fade:30, grain:15 } },
+];
+const presetById = id => PRESETS.find(p => p.id === id) || PRESETS[0];
+const MARKERS = ["#ff00ff", "#00ff00", "#ff6a00"];
+const newColor = (name, hex, marker) => ({ id: uid(), name, hex, on: true, range: 25, strength: 100, light: 60, auto: false, markerOn: false, marker: marker || "#ff00ff" });
+const DEFAULT_PALETTE = () => [newColor("Periwinkle blue", "#7193d2", MARKERS[0]), newColor("Olive green", "#56623a", MARKERS[1]), newColor("Earth brown", "#6b4f37", MARKERS[2])];
+// Marker colors painted in Procreate/Photoshop: match by hue, ignore dull pixels.
+function keyWeight(a, b, K) {
+  const C = Math.sqrt(a * a + b * b); if (C < .07) return 0;
+  const d = Math.abs(wrap(Math.atan2(b, a) - K.h));
+  return (1 - ss(.22, .38, d)) * ss(.07, .12, C);
+}
+const OLD_DEFAULTS = ["#3f6f9f", "#5f7a4a", "#7a5a3c"];
+
+function effective(r) {
+  const pre = presetById(r.preset).p, k = r.strength / 100, e = {};
+  for (const key in ZERO) { if (key === "shHue" || key === "hiHue") continue; e[key] = (pre[key] || 0) * k + (r.adj[key] || 0); }
+  e.shHue = r.adj.shAmt > 0 ? r.adj.shHue : (pre.shHue ?? 30);
+  e.hiHue = r.adj.hiAmt > 0 ? r.adj.hiHue : (pre.hiHue ?? 45);
+  return e;
+}
+function hueOff(hd) {
+  const hh = ((hd % 360) + 360) % 360 / 60, x = 1 - Math.abs(hh % 2 - 1);
+  const c = hh < 1 ? [1, x, 0] : hh < 2 ? [x, 1, 0] : hh < 3 ? [0, 1, x] : hh < 4 ? [0, x, 1] : hh < 5 ? [x, 0, 1] : [1, 0, x];
+  const y = .299 * c[0] + .587 * c[1] + .114 * c[2];
+  return [c[0] - y, c[1] - y, c[2] - y];
+}
+function compile(e) {
+  const n = v => Math.max(-1, Math.min(1, v / 100));
+  const P = { temp:n(e.temp), tint:n(e.tint), saturation:n(e.saturation), vibrance:n(e.vibrance), grain:Math.max(0, n(e.grain)), vignette:Math.max(0, n(e.vignette)) };
+  const ev = Math.max(-3, Math.min(3, e.exposure / 50)), gain = Math.pow(2, ev);
+  const con = n(e.contrast), hi = n(e.highlights), sh = n(e.shadows), fade = Math.max(0, n(e.fade));
+  const lut = new Float32Array(1024);
+  for (let i = 0; i < 1024; i++) {
+    let x = i / 1023;
+    x = Math.pow(Math.min(1, Math.pow(x, 2.2) * gain), 1 / 2.2);
+    x += hi * .22 * ss(.45, 1, x);
+    x += sh * .22 * (1 - ss(0, .55, x));
+    x = clamp01(x);
+    const s = x < .5 ? 2 * x * x : 1 - 2 * (1 - x) * (1 - x);
+    x += con * .9 * (s - x);
+    x += fade * (.1 + x * .86 - x);
+    lut[i] = clamp01(x);
+  }
+  P.lut = lut;
+  const sa = Math.max(0, n(e.shAmt)) * .45, ha = Math.max(0, n(e.hiAmt)) * .4;
+  const so = hueOff(e.shHue), ho = hueOff(e.hiHue);
+  P.split = sa > 0 || ha > 0;
+  P.sr = so[0] * sa; P.sg = so[1] * sa; P.sb = so[2] * sa;
+  P.hr = ho[0] * ha; P.hg = ho[1] * ha; P.hb = ho[2] * ha;
+  P.skTone = n(e.skinTone) * .3; P.skSat = n(e.skinSat); P.skBr = n(e.skinBright); P.skPro = Math.max(0, n(e.skinProtect));
+  P.skinOn = !!(P.skTone || P.skSat || P.skBr || P.skPro);
+  return P;
+}
+
+/* ---------- pixel engine ----------
+   order: white point (per photo) → look → Match → per-photo nudge → your colors → vignette, grain */
+function hash(x, y) {
+  let n = Math.imul(x, 374761393) + Math.imul(y, 668265263);
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  return ((n ^ (n >>> 16)) & 0xffff) / 65535;
+}
+function processImage(src, dst, P, opt) {
+  const s = src.data, d = dst.data, w = src.width, hgt = src.height, lut = P.lut;
+  const pre = opt.pre || [1, 1, 1];
+  const wbR = (1 + .14 * P.temp + .04 * P.tint) * pre[0], wbG = (1 - .10 * P.tint) * pre[1], wbB = (1 - .14 * P.temp + .04 * P.tint) * pre[2];
+  const sat = 1 + P.saturation, vib = P.vibrance, doSat = sat !== 1 || vib !== 0;
+  const X = opt.match, split = P.split, PAL = opt.palette;
+  let nKeys = 0;
+  const PNT = opt.paints ? opt.paints.map(t => t.key ? { ...t, ki: nKeys++ } : { ...t, sx: (t.mw - 1) / Math.max(1, w - 1), sy: (t.mh - 1) / Math.max(1, hgt - 1) }) : null;
+  const KEYS = PNT ? PNT.filter(t => t.key) : [], kw = new Float32Array(Math.max(1, nKeys)), skinOn = P.skinOn;
+  const nu = opt.nudge, doNudge = !!(nu && (nu.exposure || nu.temp));
+  const ne = doNudge ? Math.pow(2, nu.exposure / 100 * .9) : 1;
+  const nr = ne * (1 + (doNudge ? nu.temp : 0) / 100 * .12), nb = ne * (1 - (doNudge ? nu.temp : 0) / 100 * .12);
+  const doVig = opt.fx && P.vignette > 0, doGrain = opt.fx && P.grain > 0;
+  const cx = w / 2, cy = hgt / 2, gs = opt.grainScale || 1, vigK = P.vignette * .75, grK = P.grain * .16, aspect = hgt / w;
+  for (let y = 0; y < hgt; y++) {
+    const dy = (y - cy) / cy, gy = (y / gs) | 0, ny = y / hgt;
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      let sL = 0, sa = 0, sbb = 0, sk = 0;
+      if (nKeys || skinOn) {
+        rgb2lab(s[i] / 255 * pre[0], s[i + 1] / 255 * pre[1], s[i + 2] / 255 * pre[2]); sL = LAB[0]; sa = LAB[1]; sbb = LAB[2];
+        for (let q = 0; q < nKeys; q++) kw[q] = keyWeight(sa, sbb, KEYS[q].key);
+        if (skinOn) sk = skinWeight(sL, sa, sbb);
+      }
+      let r = s[i] / 255 * wbR, g = s[i + 1] / 255 * wbG, b = s[i + 2] / 255 * wbB;
+      r = lut[r >= 1 ? 1023 : r <= 0 ? 0 : (r * 1023) | 0];
+      g = lut[g >= 1 ? 1023 : g <= 0 ? 0 : (g * 1023) | 0];
+      b = lut[b >= 1 ? 1023 : b <= 0 ? 0 : (b * 1023) | 0];
+      let Y = .299 * r + .587 * g + .114 * b;
+      if (doSat) {
+        const mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b), sl = mx - mn;
+        const k = sat * (1 + vib * (vib > 0 ? (1 - sl) : sl));
+        r = Y + (r - Y) * k; g = Y + (g - Y) * k; b = Y + (b - Y) * k;
+      }
+      if (split) {
+        const sw = (1 - Y) * (1 - Y), hw = Y * Y;
+        r += P.sr * sw + P.hr * hw; g += P.sg * sw + P.hg * hw; b += P.sb * sw + P.hb * hw;
+      }
+      if (X) {
+        r = clamp01(r); g = clamp01(g); b = clamp01(b);
+        Y = .299 * r + .587 * g + .114 * b;
+        let cb = b - Y, cr = r - Y;
+        Y = Y * X.aY + X.bY; cb = cb * X.aCb + X.bCb; cr = cr * X.aCr + X.bCr;
+        r = Y + cr; b = Y + cb; g = (Y - .299 * r - .114 * b) / .587;
+      }
+      if (doNudge) { r *= nr; g *= ne; b *= nb; }
+      if (sk > .01) {
+        rgb2lab(clamp01(r), clamp01(g), clamp01(b));
+        let L = LAB[0], A = LAB[1], B = LAB[2];
+        if (P.skPro) { const k = sk * P.skPro; A += (sa - A) * k; B += (sbb - B) * k; }
+        if (P.skTone || P.skSat) {
+          const C = Math.sqrt(A * A + B * B) * (1 + P.skSat * .5 * sk), hh = Math.atan2(B, A) + P.skTone * sk;
+          A = C * Math.cos(hh); B = C * Math.sin(hh);
+        }
+        L += P.skBr * .06 * sk;
+        lab2rgb(L, A, B); r = RGB[0]; g = RGB[1]; b = RGB[2];
+      }
+      if (PAL) {
+        r = clamp01(r); g = clamp01(g); b = clamp01(b);
+        const mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        if (mx - mn > .012) {
+          rgb2lab(r, g, b);
+          let L = LAB[0]; const A = LAB[1], B = LAB[2], C = Math.sqrt(A * A + B * B), cg = ss(.012, .045, C);
+          if (cg > 0) {
+            const hh = Math.atan2(B, A), L0 = L;
+            let sw = 0, sdh = 0, scr = 0, sdl = 0;
+            for (let q = 0; q < PAL.length; q++) {
+              const t = PAL[q], z = wrap(hh - t.hs) / t.sig;
+              if (z > 2.6 || z < -2.6) continue;
+              const zl = (L0 - t.ls) / t.sl;
+              let wt = Math.exp(-z * z - zl * zl) * cg * t.k;
+              if (t.local) {
+                const ddx = x / w - t.local.x, ddy = (ny - t.local.y) * aspect, dd = Math.sqrt(ddx * ddx + ddy * ddy);
+                wt *= 1 - ss(t.local.r * .55, t.local.r, dd);
+              }
+              if (wt <= 0) continue;
+              sw += wt; sdh += wt * t.dh; scr += wt * (t.cr - 1); sdl += wt * t.dL;
+            }
+            if (sw > 0) {
+              const nrm = sw > 1 ? 1 / sw : 1, nh = hh + sdh * nrm, nc = C * (1 + scr * nrm);
+              L += sdl * nrm;
+              lab2rgb(L, nc * Math.cos(nh), nc * Math.sin(nh));
+              r = RGB[0]; g = RGB[1]; b = RGB[2];
+            }
+          }
+        }
+      }
+      if (PNT) {
+        for (let q = 0; q < PNT.length; q++) {
+          const t = PNT[q];
+          let v;
+          if (t.key) v = kw[t.ki];
+          else {
+            const fx = x * t.sx, fy = y * t.sy;
+            let x0 = fx | 0, y0 = fy | 0;
+            if (x0 > t.mw - 2) x0 = t.mw - 2; if (y0 > t.mh - 2) y0 = t.mh - 2; if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
+            const ax = clamp01(fx - x0), ay = clamp01(fy - y0), m = t.m, j = y0 * t.mw + x0;
+            v = ((m[j] * (1 - ax) + m[j + 1] * ax) * (1 - ay) + (m[j + t.mw] * (1 - ax) + m[j + t.mw + 1] * ax) * ay) / 255;
+          }
+          if (v <= .003) continue;
+          r = clamp01(r); g = clamp01(g); b = clamp01(b);
+          rgb2lab(r, g, b);
+          const Lp = LAB[0] + t.dL, cs = ss(.06, .24, Lp) * (1 - ss(.9, 1, Lp));
+          lab2rgb(Lp, t.A * cs, t.B * cs);
+          const k = v * t.k;
+          r += (RGB[0] - r) * k; g += (RGB[1] - g) * k; b += (RGB[2] - b) * k;
+        }
+      }
+      if (doVig) {
+        const dx = (x - cx) / cx, d2 = (dx * dx + dy * dy) * .5, f = 1 - vigK * d2 * Math.sqrt(d2);
+        r *= f; g *= f; b *= f;
+      }
+      if (doGrain) {
+        const Lg = .299 * r + .587 * g + .114 * b;
+        const nz = (hash((x / gs) | 0, gy) - .5) * grK * (1 - Math.abs(Lg * 2 - 1) * .6);
+        r += nz; g += nz; b += nz;
+      }
+      d[i] = r * 255; d[i + 1] = g * 255; d[i + 2] = b * 255; d[i + 3] = 255;
+    }
+  }
+  return dst;
+}
+function imageStats(img) {
+  const s = img.data, n = s.length / 4, step = Math.max(1, Math.floor(n / 20000));
+  let c = 0, mY = 0, mB = 0, mR = 0, qY = 0, qB = 0, qR = 0;
+  for (let p = 0; p < n; p += step) {
+    const i = p * 4, r = s[i] / 255, g = s[i + 1] / 255, b = s[i + 2] / 255;
+    const Y = .299 * r + .587 * g + .114 * b, cb = b - Y, cr = r - Y;
+    mY += Y; mB += cb; mR += cr; qY += Y * Y; qB += cb * cb; qR += cr * cr; c++;
+  }
+  mY /= c; mB /= c; mR /= c;
+  return { mY, mB, mR, sY: Math.sqrt(Math.max(0, qY / c - mY * mY)), sB: Math.sqrt(Math.max(0, qB / c - mB * mB)), sR: Math.sqrt(Math.max(0, qR / c - mR * mR)) };
+}
+function buildXform(src, m) {
+  const ref = m.ref, k = m.strength / 100, cl = (v, a, b) => Math.max(a, Math.min(b, v));
+  let aY = 1, bY = 0, aCb = 1, bCb = 0, aCr = 1, bCr = 0;
+  if (m.light) { aY = src.sY > .01 ? cl(ref.sY / src.sY, .6, 1.6) : 1; bY = ref.mY - src.mY * aY; }
+  if (m.color) {
+    aCb = src.sB > .006 ? cl(ref.sB / src.sB, .5, 2) : 1; bCb = ref.mB - src.mB * aCb;
+    aCr = src.sR > .006 ? cl(ref.sR / src.sR, .5, 2) : 1; bCr = ref.mR - src.mR * aCr;
+  }
+  return { aY: 1 + k * (aY - 1), bY: k * bY, aCb: 1 + k * (aCb - 1), bCb: k * bCb, aCr: 1 + k * (aCr - 1), bCr: k * bCr };
+}
+
+/* ---------- finding your colors in a photo ---------- */
+function avgLab(img, pt, rad) {
+  const s = img.data, w = img.width, hh = img.height, cx = Math.round(pt.x * (w - 1)), cy = Math.round(pt.y * (hh - 1));
+  let L = 0, A = 0, B = 0, c = 0;
+  for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+    const X = cx + dx, Y = cy + dy; if (X < 0 || Y < 0 || X >= w || Y >= hh) continue;
+    const i = (Y * w + X) * 4; rgb2lab(s[i] / 255, s[i + 1] / 255, s[i + 2] / 255);
+    L += LAB[0]; A += LAB[1]; B += LAB[2]; c++;
+  }
+  L /= c; A /= c; B /= c;
+  return { L, A, B, C: Math.hypot(A, B), h: Math.atan2(B, A) };
+}
+function avgRGB(img, pt, rad) {
+  const s = img.data, w = img.width, hh = img.height, cx = Math.round(pt.x * (w - 1)), cy = Math.round(pt.y * (hh - 1));
+  let r = 0, g = 0, b = 0, c = 0;
+  for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+    const X = cx + dx, Y = cy + dy; if (X < 0 || Y < 0 || X >= w || Y >= hh) continue;
+    const i = (Y * w + X) * 4; r += s[i]; g += s[i + 1]; b += s[i + 2]; c++;
+  }
+  return [r / c / 255, g / c / 255, b / c / 255];
+}
+function findColors(img, photo, pal) {
+  const found = {}, auto = [];
+  for (const t of pal) {
+    const pk = photo.picks?.[t.id];
+    if (pk) { const f = avgLab(img, pk, 2); found[t.id] = f.C < .02 ? { how: "grey" } : { ...f, how: "tap" }; }
+    else { const T = hexLab(t.hex); auto.push({ t, T, W: Math.max(t.range * 1.8, 40) * Math.PI / 180, sL: 0, sA: 0, sB: 0, sw: 0, cnt: 0 }); }
+  }
+  if (auto.length) {
+    const s = img.data, N = img.width * img.height, step = Math.max(1, Math.floor(N / 25000));
+    let tot = 0;
+    for (let p = 0; p < N; p += step) {
+      const i = p * 4; tot++;
+      const r = s[i] / 255, g = s[i + 1] / 255, b = s[i + 2] / 255;
+      if (Math.max(r, g, b) - Math.min(r, g, b) < .04) continue;
+      rgb2lab(r, g, b);
+      const A = LAB[1], B = LAB[2], C = Math.hypot(A, B); if (C < .035) continue;
+      const hh = Math.atan2(B, A);
+      for (const q of auto) {
+        const z = wrap(hh - q.T.h) / q.W; if (z > 2 || z < -2) continue;
+        const dl = (LAB[0] - q.T.L) / .22, wt = C * Math.exp(-z * z - dl * dl);
+        q.sL += LAB[0] * wt; q.sA += A * wt; q.sB += B * wt; q.sw += wt; q.cnt++;
+      }
+    }
+    for (const q of auto) {
+      if (q.cnt < Math.max(12, tot * .004)) { found[q.t.id] = { how: "none" }; continue; }
+      const L = q.sL / q.sw, A = q.sA / q.sw, B = q.sB / q.sw, C = Math.hypot(A, B);
+      found[q.t.id] = C < .02 ? { how: "none" } : { L, A, B, C, h: Math.atan2(B, A), how: "auto" };
+    }
+  }
+  return found;
+}
+function paletteFor(photo, found) {
+  const out = [];
+  for (const t of state.recipe.palette) {
+    if (!t.on) continue;
+    const f = found[t.id]; if (!f || f.C == null) continue;
+    const T = hexLab(t.hex), pk = photo.picks?.[t.id];
+    out.push({ hs: f.h, ls: f.L, sl: .1 + t.range / 250, sig: t.range * Math.PI / 180, dh: wrap(T.h - f.h), cr: Math.max(.3, Math.min(2.5, T.C / Math.max(f.C, .001))),
+      dL: (T.L - f.L) * t.light / 100, k: t.strength / 100, local: pk && pk.local ? { x: pk.x, y: pk.y, r: pk.r } : null });
+  }
+  return out.length ? out : null;
+}
+
+/* ---------- state ---------- */
+const saved = LS.get("safelight:last", null);
+const state = {
+  photos: [], cur: 0, view: "edit", tab: "looks", tapMode: null,
+  recipe: saved?.recipe ? { ...saved.recipe, adj: { ...ZERO, ...saved.recipe.adj } } : { preset: "none", strength: 100, adj: { ...ZERO }, match: null },
+  crop: saved?.crop || "original", size: "ig", recipes: [], showOriginal: false,
+};
+if (!Array.isArray(state.recipe.palette) || (state.recipe.palette.length === 3 && state.recipe.palette.every((t, i) => t.hex === OLD_DEFAULTS[i])))
+  state.recipe.palette = DEFAULT_PALETTE();
+function upgradePalette(pal) {
+  (pal || []).forEach((t, i) => { if (t.auto === undefined) t.auto = false; if (t.markerOn === undefined) t.markerOn = false; if (!t.marker) t.marker = MARKERS[i % 3]; });
+}
+upgradePalette(state.recipe.palette);
+function persist() { LS.set("safelight:last", { recipe: state.recipe, crop: state.crop }); }
+const curPhoto = () => state.photos[state.cur];
+
+// Everything the photo needs, computed on its small thumbnail so it's identical at every size.
+function analyze(photo, opts = {}) {
+  const P = compile(effective(state.recipe)), pre = photo.pre || null, th = photo.thumb;
+  const tmp = new ImageData(th.width, th.height);
+  let match = null; const m = state.recipe.match;
+  if (m && (m.light || m.color)) { processImage(th, tmp, P, { pre, fx: false }); match = buildXform(imageStats(tmp), m); }
+  let found = {};
+  const pal = opts.noPalette ? [] : state.recipe.palette.filter(t => t.on && t.auto);
+  const painted = state.recipe.palette.filter(t => t.on && (photo.masks?.[t.id] || t.markerOn));
+  if (pal.length || painted.length) processImage(th, tmp, P, { pre, match, nudge: photo.nudge, fx: false });
+  if (pal.length) found = findColors(tmp, photo, pal);
+  photo.found = found;
+  return { P, opts: { pre, match, nudge: photo.nudge, palette: pal.length ? paletteFor(photo, found) : null, paints: painted.length ? paintsFor(photo, painted, tmp) : null } };
+}
+// Painted areas: recolor to your shade, keeping the object's own light and shadow (like a Color blend layer).
+function paintsFor(photo, painted, img) {
+  const out = [], mw = photo.base.width, mh = photo.base.height, w = img.width, hh = img.height, s = img.data;
+  photo.markerFound = {};
+  const o = photo.thumb.data;
+  for (const t of painted) {
+    const T = hexLab(t.hex);
+    const mk = photo.masks?.[t.id] ? (photo.soft?.[t.id] || photo.masks[t.id]) : null;
+    if (mk) {
+      let sL = 0, c = 0;
+      for (let y = 0; y < hh; y += 2) {
+        const my = Math.round(y * (mh - 1) / Math.max(1, hh - 1)) * mw;
+        for (let x = 0; x < w; x += 2) {
+          if (mk[my + Math.round(x * (mw - 1) / Math.max(1, w - 1))] < 128) continue;
+          const i = (y * w + x) * 4; rgb2lab(s[i] / 255, s[i + 1] / 255, s[i + 2] / 255); sL += LAB[0]; c++;
+        }
+      }
+      if (c) out.push({ m: mk, mw, mh, A: T.A, B: T.B, dL: (T.L - sL / c) * t.light / 100, k: t.strength / 100 });
+    }
+    if (t.markerOn && t.marker) {
+      const K = hexLab(t.marker);
+      let sL = 0, c = 0;
+      for (let p = 0; p < o.length; p += 4) {
+        rgb2lab(o[p] / 255, o[p + 1] / 255, o[p + 2] / 255);
+        if (keyWeight(LAB[1], LAB[2], K) < .5) continue;
+        rgb2lab(s[p] / 255, s[p + 1] / 255, s[p + 2] / 255); sL += LAB[0]; c++;
+      }
+      photo.markerFound[t.id] = c;
+      if (c >= 3) out.push({ key: K, A: T.A, B: T.B, dL: (T.L - sL / c) * t.light / 100, k: 1 }); // a marker is never a real color: always convert it fully
+    }
+  }
+  return out.length ? out : null;
+}
+
+/* ---------- painting objects your color ---------- */
+function blurMask(m, w, hh, r) {
+  const tmp = new Float32Array(w * hh), out = new Uint8Array(w * hh), n = 2 * r + 1;
+  for (let y = 0; y < hh; y++) {
+    let acc = 0; const row = y * w;
+    for (let x = -r; x <= r; x++) acc += m[row + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      tmp[row + x] = acc / n;
+      acc += m[row + Math.min(w - 1, x + r + 1)] - m[row + Math.max(0, x - r)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += tmp[Math.min(hh - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < hh; y++) {
+      out[y * w + x] = acc / n;
+      acc += tmp[Math.min(hh - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+    }
+  }
+  return out;
+}
+function smartSelect(p, pt, tol, mask) {
+  const img = p.base, s = img.data, w = img.width, hh = img.height;
+  const sx = Math.round(pt.x * (w - 1)), sy = Math.round(pt.y * (hh - 1)), seed = avgLab(img, pt, 2), T2 = (tol / 100) ** 2;
+  const seen = new Uint8Array(w * hh), q = new Int32Array(w * hh);
+  let head = 0, tail = 0, added = 0;
+  q[tail++] = sy * w + sx; seen[sy * w + sx] = 1;
+  while (head < tail) {
+    const idx = q[head++], i = idx * 4;
+    rgb2lab(s[i] / 255, s[i + 1] / 255, s[i + 2] / 255);
+    const dl = (LAB[0] - seed.L) * .5, da = LAB[1] - seed.A, db = LAB[2] - seed.B;
+    if (dl * dl + da * da + db * db > T2 && head > 1) continue;
+    if (mask[idx] < 255) { mask[idx] = 255; added++; }
+    const x = idx % w;
+    if (x > 0 && !seen[idx - 1]) { seen[idx - 1] = 1; q[tail++] = idx - 1; }
+    if (x < w - 1 && !seen[idx + 1]) { seen[idx + 1] = 1; q[tail++] = idx + 1; }
+    if (idx >= w && !seen[idx - w]) { seen[idx - w] = 1; q[tail++] = idx - w; }
+    if (idx < w * (hh - 1) && !seen[idx + w]) { seen[idx + w] = 1; q[tail++] = idx + w; }
+  }
+  return added;
+}
+function stamp(p, mask, cx, cy, r, erase) {
+  const w = p.base.width, hh = p.base.height;
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r)), y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(hh - 1, Math.ceil(cy + r));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const d = Math.hypot(x - cx, y - cy) / r; if (d >= 1) continue;
+    const v = 255 * (1 - ss(.6, 1, d)), j = y * w + x;
+    mask[j] = erase ? Math.min(mask[j], 255 - v) : Math.max(mask[j], v);
+  }
+}
+let ovData = null;
+function drawOverlay() {
+  const ov = $("#ov"), P = state.paint, p = curPhoto();
+  const skin = !P && state.showSkin && state.view === "edit" && state.tab === "adjust";
+  if (!p || (!skin && (!P || !P.show || !p.masks?.[P.id]))) { ov.hidden = true; return; }
+  const w = p.base.width, hh = p.base.height;
+  if (ov.width !== w || ov.height !== hh) { ov.width = w; ov.height = hh; }
+  if (!ovData || ovData.width !== w || ovData.height !== hh) ovData = new ImageData(w, hh);
+  const d = ovData.data;
+  const key = skin ? "skin:" + p.id + ":" + String(p.pre) + ":" + w : "";
+  if (skin && ov.dataset.key === key) { ov.hidden = false; return; }
+  ov.dataset.key = key;
+  if (skin) {
+    const s = p.base.data, pre = p.pre || [1, 1, 1];
+    for (let i = 0; i < s.length; i += 4) {
+      rgb2lab(s[i] / 255 * pre[0], s[i + 1] / 255 * pre[1], s[i + 2] / 255 * pre[2]);
+      d[i] = 242; d[i + 1] = 160; d[i + 2] = 78; d[i + 3] = skinWeight(LAB[0], LAB[1], LAB[2]) * 170;
+    }
+  } else {
+    const m = p.masks[P.id];
+    for (let j = 0; j < m.length; j++) { const i = j * 4; d[i] = 242; d[i + 1] = 160; d[i + 2] = 78; d[i + 3] = m[j] * .42; }
+  }
+  ov.getContext("2d").putImageData(ovData, 0, 0); ov.hidden = false;
+}
+function startPaint(id) {
+  const p = curPhoto(); if (!p) return;
+  setTapMode(null); if (state.view !== "edit") setView("edit");
+  p.masks = p.masks || {}; p.soft = p.soft || {};
+  if (!p.masks[id]) p.masks[id] = new Uint8Array(p.base.width * p.base.height);
+  state.paint = { id, tool: "select", size: 22, tol: 10, show: true, undo: [] };
+  stage.classList.add("painting"); $("#hint").hidden = true;
+  renderPanel(); drawOverlay();
+}
+function endPaint() {
+  const P = state.paint; if (!P) return;
+  const p = curPhoto(); state.paint = null; stroke = null;
+  if (p?.masks?.[P.id] && !p.masks[P.id].some(v => v > 8)) { delete p.masks[P.id]; delete p.soft[P.id]; }
+  stage.classList.remove("painting"); $("#ov").hidden = true; $("#hint").hidden = state.view === "feed";
+  scheduleRender(); schedulePresetThumbs(); renderPanel();
+}
+function finishOp(p) {
+  const id = state.paint.id, w = p.base.width, hh = p.base.height, m = p.masks[id], grown = new Uint8Array(m.length);
+  for (let j = 0; j < m.length; j++) {   // grow 1px so no halo of the old color is left at the edges
+    const x = j % w; let v = m[j];
+    if (x > 0 && m[j - 1] > v) v = m[j - 1]; if (x < w - 1 && m[j + 1] > v) v = m[j + 1];
+    if (j >= w && m[j - w] > v) v = m[j - w]; if (j < m.length - w && m[j + w] > v) v = m[j + w];
+    grown[j] = v;
+  }
+  p.soft[id] = blurMask(grown, w, hh, 2);
+  drawOverlay(); scheduleRender();
+}
+let stroke = null;
+function paintTo(pt) {
+  const p = curPhoto(), P = state.paint; if (!p || !P || !stroke) return;
+  const w = p.base.width, hh = p.base.height, a = stroke.last, mask = p.masks[P.id];
+  const ax = a.x * (w - 1), ay = a.y * (hh - 1), bx = pt.x * (w - 1), by = pt.y * (hh - 1);
+  const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (stroke.r / 3)));
+  for (let k = 1; k <= steps; k++) stamp(p, mask, ax + (bx - ax) * k / steps, ay + (by - ay) * k / steps, stroke.r, stroke.erase);
+  stroke.last = pt;
+  if (!stroke.raf) stroke.raf = requestAnimationFrame(() => { if (stroke) stroke.raf = 0; drawOverlay(); });
+}
+
+/* ---------- photos ---------- */
+const PREVIEW = 1080, THUMB = 240, MINI = 110;
+const CROPS = { original: null, "4:5": 4 / 5, "1:1": 1, "3:4": 3 / 4 };
+function cropRect(W, H, crop) {
+  const r = CROPS[crop]; if (!r) return { x: 0, y: 0, w: W, h: H };
+  if (W / H > r) { const w = Math.round(H * r); return { x: Math.round((W - w) / 2), y: 0, w, h: H }; }
+  const hh = Math.round(W / r); return { x: 0, y: Math.round((H - hh) / 2), w: W, h: hh };
+}
+async function decode(photo) {
+  if (photo.sample) return photo.sample;
+  try { return await createImageBitmap(photo.file); }
+  catch (e) { const img = new Image(); img.src = URL.createObjectURL(photo.file); await img.decode(); return img; }
+}
+const dims = src => [src.naturalWidth || src.width, src.naturalHeight || src.height];
+function drawTo(src, rect, scale) {
+  const w = Math.max(1, Math.round(rect.w * scale)), hh = Math.max(1, Math.round(rect.h * scale));
+  const c = document.createElement("canvas"); c.width = w; c.height = hh;
+  const x = c.getContext("2d", { willReadFrequently: true }); x.imageSmoothingQuality = "high";
+  x.drawImage(src, rect.x, rect.y, rect.w, rect.h, 0, 0, w, hh);
+  return { canvas: c, ctx: x, data: x.getImageData(0, 0, w, hh) };
+}
+async function buildBase(photo) {
+  const src = await decode(photo), [W, H] = dims(src), rect = cropRect(W, H, state.crop), L = Math.max(rect.w, rect.h);
+  photo.base = drawTo(src, rect, Math.min(1, PREVIEW / L)).data;
+  photo.thumb = drawTo(src, rect, Math.min(1, THUMB / L)).data;
+  photo.mini = drawTo(src, rect, Math.min(1, MINI / L)).data;
+  photo.out = new ImageData(photo.base.width, photo.base.height);
+  photo.thumbOut = new ImageData(photo.thumb.width, photo.thumb.height);
+  photo.nudge = photo.nudge || { exposure: 0, temp: 0 };
+  if (!photo.sample && src.close) src.close();
+}
+async function rebuildAll() {
+  for (const p of state.photos) { p.picks = {}; p.masks = {}; p.soft = {}; p.neutral = p.pre ? null : p.neutral; await buildBase(p); }
+  renderAll();
+}
+
+function makeSample(kind) {
+  const W = 1080, H = 1350, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+  const K = {
+    dawn: { sky: ["#e9a06a", "#f4cf9f", "#a8b6c8"], sun: "#fff0c4", ridges: ["#9c8a96", "#7a6c80", "#574d62", "#332d3b"], ground: "#463d2c", haze: "rgba(250,205,160,.28)", seed: 1 },
+    noon: { sky: ["#4f8fd4", "#86b6e8", "#d5e6f4"], sun: null, ridges: ["#8aa3b6", "#5f7c93", "#3e586d", "#223546"], ground: "#476a2c", haze: "rgba(225,238,252,.3)", seed: 2 },
+    grey: { sky: ["#8f938f", "#a9aca7", "#bfc1bc"], sun: null, ridges: ["#7f857e", "#666c65", "#4d534c", "#353a33"], ground: "#353d2e", haze: "rgba(190,192,186,.35)", seed: 3 },
+  }[kind];
+  const g = x.createLinearGradient(0, 0, 0, H * .62); g.addColorStop(0, K.sky[0]); g.addColorStop(.55, K.sky[1]); g.addColorStop(1, K.sky[2]);
+  x.fillStyle = g; x.fillRect(0, 0, W, H);
+  if (K.sun) { const s = x.createRadialGradient(W * .68, H * .4, 10, W * .68, H * .4, 260); s.addColorStop(0, K.sun); s.addColorStop(.15, K.sun); s.addColorStop(1, "rgba(255,230,190,0)"); x.fillStyle = s; x.fillRect(0, 0, W, H); }
+  K.ridges.forEach((col, i) => {
+    const base = H * (.46 + i * .085), amp = 40 + i * 22, sd = K.seed * 7 + i * 3.1;
+    x.beginPath(); x.moveTo(0, H);
+    for (let px = 0; px <= W; px += 6) {
+      const t = px / W;
+      x.lineTo(px, base - amp * (Math.sin(t * 5 + sd) * .5 + Math.sin(t * 13 + sd * 2) * .25 + Math.sin(t * 29 + sd * 3) * .12));
+    }
+    x.lineTo(W, H); x.closePath(); x.fillStyle = col; x.fill();
+    if (i < K.ridges.length - 1) { x.fillStyle = K.haze; x.fillRect(0, 0, W, H); }
+  });
+  x.fillStyle = K.ground; x.beginPath(); x.moveTo(0, H);
+  for (let px = 0; px <= W; px += 8) x.lineTo(px, H * .86 - 18 * Math.sin(px / 140 + K.seed));
+  x.lineTo(W, H); x.fill();
+  x.fillStyle = "rgba(10,14,8,.85)";
+  for (let t = 0; t < 9; t++) {
+    const tx = 60 + t * 115 + (t * 37 % 40), th = 120 + (t * 53 % 90), ty = H * .86 - 10;
+    x.beginPath(); x.moveTo(tx, ty - th); x.lineTo(tx - th * .22, ty); x.lineTo(tx + th * .22, ty); x.fill();
+  }
+  x.fillStyle = "#f2f0ea"; x.fillRect(W * .1, H * .9, 70, 50);   // a white mailbox-sized card to test the white point
+  return c;
+}
+async function loadSamples() {
+  const names = { dawn: "Sample · dawn", noon: "Sample · midday", grey: "Sample · overcast" };
+  for (const k of ["dawn", "noon", "grey"]) {
+    const p = { id: uid(), name: names[k], sample: makeSample(k), isSample: true };
+    await buildBase(p); state.photos.push(p);
+  }
+}
+
+/* ---------- rendering ---------- */
+const mainC = $("#main"), mainX = mainC.getContext("2d");
+let rafPending = false, thumbTimer = null, presetTimer = null;
+function scheduleRender() {
+  persist();
+  if (!rafPending) { rafPending = true; requestAnimationFrame(() => { rafPending = false; renderMain(); }); }
+  clearTimeout(thumbTimer); thumbTimer = setTimeout(renderThumbs, 160);
+}
+function renderMain() {
+  const p = curPhoto(); if (!p?.base) return;
+  if (mainC.width !== p.base.width || mainC.height !== p.base.height) { mainC.width = p.base.width; mainC.height = p.base.height; }
+  if (state.showOriginal) { mainX.putImageData(p.base, 0, 0); updateMarkers(); return; }
+  const A = analyze(p);
+  processImage(p.base, p.out, A.P, { ...A.opts, fx: true, grainScale: Math.max(1, Math.max(p.base.width, p.base.height) / 1100) });
+  mainX.putImageData(p.out, 0, 0);
+  updateMarkers(); refreshStatus();
+  if (state.showSkin && !state.paint) drawOverlay();
+}
+function renderThumbs() {
+  for (const p of state.photos) {
+    if (!p.thumb) continue;
+    const A = analyze(p);
+    processImage(p.thumb, p.thumbOut, A.P, { ...A.opts, fx: true, grainScale: 1 });
+    for (const c of [p.stripC, p.feedC]) if (c) { c.width = p.thumb.width; c.height = p.thumb.height; c.getContext("2d").putImageData(p.thumbOut, 0, 0); }
+  }
+}
+function renderPresetThumbs() {
+  const p = curPhoto(); if (!p?.mini) return;
+  const A = analyze(p);
+  for (const pr of PRESETS) {
+    const c = presetCanvases[pr.id]; if (!c || !c.isConnected) continue;
+    const P = compile(effective({ preset: pr.id, strength: 100, adj: ZERO }));
+    const out = new ImageData(p.mini.width, p.mini.height);
+    processImage(p.mini, out, P, { ...A.opts, fx: false });
+    c.width = out.width; c.height = out.height; c.getContext("2d").putImageData(out, 0, 0);
+  }
+}
+function schedulePresetThumbs() { clearTimeout(presetTimer); presetTimer = setTimeout(renderPresetThumbs, 220); }
+
+function updateMarkers() {
+  const box = $("#markers"); box.replaceChildren();
+  const p = curPhoto(); if (!p || state.view !== "edit") return;
+  const r = mainC.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  const put = (pt, color, label) => {
+    const m = h("span", { class: "mk", title: label });
+    m.style.left = (r.left - sr.left + pt.x * r.width) + "px"; m.style.top = (r.top - sr.top + pt.y * r.height) + "px";
+    if (color) m.style.background = color;
+    box.append(m);
+  };
+  if (p.neutral) put(p.neutral, null, "White point");
+  for (const t of state.recipe.palette) { const pk = p.picks?.[t.id]; if (pk && t.on && t.auto) put(pk, t.hex, t.name); }
+}
+window.addEventListener("resize", () => updateMarkers());
+
+function renderStrip() {
+  const strip = $("#strip"); strip.replaceChildren();
+  const grid = $("#feedGrid"); grid.replaceChildren();
+  state.photos.forEach((p, i) => {
+    p.stripC = h("canvas"); p.feedC = h("canvas");
+    const isCur = i === state.cur;
+    const b = h("button", { class: "thumb", "aria-current": isCur ? "true" : "false", "aria-label": p.name, onclick: () => select(i) }, p.stripC);
+    if (isCur && !p.isSample) b.append(h("span", { class: "x", role: "button", "aria-label": "Remove " + p.name, text: "×", onclick: ev => { ev.stopPropagation(); removePhoto(i); } }));
+    strip.append(b);
+    grid.append(h("button", { "aria-label": "Edit " + p.name, onclick: () => { select(i); setView("edit"); } }, p.feedC));
+  });
+  strip.append(h("label", { class: "thumb add", for: "fileIn", "aria-label": "Add photos", text: "+" }));
+  renderThumbs();
+}
+function select(i) { if (state.paint) endPaint(); state.cur = i; setTapMode(null); renderStrip(); renderMain(); schedulePresetThumbs(); if (["light", "colors"].includes(state.tab)) renderPanel(); }
+function removePhoto(i) {
+  state.photos.splice(i, 1);
+  if (!state.photos.length) { loadSamples().then(renderAll); return; }
+  state.cur = Math.min(state.cur, state.photos.length - 1); renderAll();
+}
+function renderAll() { renderStrip(); renderMain(); renderPanel(); schedulePresetThumbs(); }
+
+/* ---------- view, compare, tapping the photo ---------- */
+const stage = $("#stage");
+function setView(v) {
+  state.view = v; $("#vEdit").setAttribute("aria-pressed", v === "edit"); $("#vFeed").setAttribute("aria-pressed", v === "feed");
+  $("#feed").hidden = v !== "feed"; $("#hint").hidden = v === "feed" || !!state.tapMode;
+  if (v === "feed") { if (state.paint) endPaint(); setTapMode(null); renderThumbs(); }
+  updateMarkers();
+}
+$("#vEdit").onclick = () => setView("edit"); $("#vFeed").onclick = () => setView("feed");
+function showOrig(on) { if (state.view !== "edit") return; state.showOriginal = on; $("#badge").hidden = !on; renderMain(); }
+function setTapMode(mode) {
+  state.tapMode = mode;
+  const bar = $("#tapbar"); bar.hidden = !mode; stage.classList.toggle("tapping", !!mode);
+  $("#hint").hidden = !!mode || state.view === "feed";
+  if (mode) { $("#tapText").textContent = mode.text; if (state.view !== "edit") setView("edit"); }
+}
+$("#tapCancel").onclick = () => setTapMode(null);
+function canvasPoint(e) {
+  const r = mainC.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+  return x < 0 || y < 0 || x > 1 || y > 1 ? null : { x, y };
+}
+stage.addEventListener("pointerdown", e => {
+  if (state.paint) {
+    const pt = canvasPoint(e), p = curPhoto(), P = state.paint; if (!pt || !p) return;
+    e.preventDefault();
+    const mask = p.masks[P.id]; P.undo.push(mask.slice()); if (P.undo.length > 12) P.undo.shift();
+    if (P.tool === "select") {
+      const added = smartSelect(p, pt, P.tol, mask);
+      finishOp(p);
+      if (added < 30) toast("Only a tiny area was picked. Raise “How similar” or use Brush.");
+    } else {
+      try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+      const rect = mainC.getBoundingClientRect();
+      stroke = { last: pt, r: Math.max(2, P.size * p.base.width / rect.width), erase: P.tool === "erase", raf: 0 };
+      paintTo(pt);
+    }
+    return;
+  }
+  if (state.tapMode) {
+    if (e.target.closest(".tapbar")) return;
+    const pt = canvasPoint(e); if (pt) handleTap(pt);
+    return;
+  }
+  if (e.target === mainC) showOrig(true);
+});
+stage.addEventListener("pointermove", e => {
+  if (!stroke) return;
+  const r = mainC.getBoundingClientRect();
+  paintTo({ x: clamp01((e.clientX - r.left) / r.width), y: clamp01((e.clientY - r.top) / r.height) });
+});
+["pointerup", "pointercancel", "pointerleave"].forEach(t => stage.addEventListener(t, () => {
+  if (stroke && t !== "pointerleave") { stroke = null; const p = curPhoto(); if (p && state.paint) finishOp(p); }
+  if (state.showOriginal) showOrig(false);
+}));
+
+function handleTap(pt) {
+  const mode = state.tapMode, p = curPhoto(); setTapMode(null); if (!p) return;
+  if (mode.kind === "neutral") {
+    const [r, g, b] = avgRGB(p.base, pt, 4), m = (r + g + b) / 3;
+    if (m < .12) { toast("That spot is too dark. Tap something white or light grey."); return; }
+    const cl = v => Math.max(.5, Math.min(2, v));
+    p.pre = [cl(m / Math.max(r, .01)), cl(m / Math.max(g, .01)), cl(m / Math.max(b, .01))]; p.neutral = pt;
+    toast("Light corrected for this photo");
+  }
+  if (mode.kind === "pick") {
+    const t = state.recipe.palette.find(x => x.id === mode.id); if (!t) return;
+    p.picks = p.picks || {}; const old = p.picks[t.id];
+    p.picks[t.id] = { x: pt.x, y: pt.y, local: old?.local || false, r: old?.r || .25 };
+    const A = analyze(p);
+    if (p.found[t.id]?.how === "grey") toast("That spot is almost grey. Tap a more colorful part of the " + t.name.toLowerCase() + ".");
+    else toast(t.name + " set from your tap");
+  }
+  if (mode.kind === "eyedrop") {
+    const t = state.recipe.palette.find(x => x.id === mode.id); if (!t) return;
+    const [r, g, b] = avgRGB(p.out, pt, 3); t.hex = toHex(r, g, b);
+    toast(t.name + " is now " + t.hex.toUpperCase());
+  }
+  scheduleRender(); schedulePresetThumbs(); renderPanel();
+}
+
+/* ---------- panel ---------- */
+const TABS = [["looks", "Looks"], ["light", "Light"], ["colors", "Colors"], ["adjust", "Adjust"], ["frame", "Frame"], ["recipes", "Recipes"]];
+const presetCanvases = {};
+function renderTabs() {
+  const t = $("#tabs"); t.replaceChildren();
+  for (const [id, label] of TABS) t.append(h("button", { role: "tab", id: "tab-" + id, "aria-selected": state.tab === id ? "true" : "false", text: label, onclick: () => { state.tab = id; setTapMode(null); if (state.paint) endPaint(); renderTabs(); renderPanel(); drawOverlay(); } }));
+}
+function slider({ id, label, min, max, step = 1, get, set, fmt, track, def = 0, disabled }) {
+  const inp = h("input", { type: "range", id, min, max, step, disabled: !!disabled });
+  inp.value = get();
+  if (track) inp.style.setProperty("--track", track);
+  const out = h("output", { class: "val", for: id });
+  const upd = () => { const v = +inp.value; out.textContent = fmt ? fmt(v) : signed(v); out.classList.toggle("on", v !== def); };
+  upd();
+  inp.addEventListener("input", () => { set(+inp.value); upd(); scheduleRender(); });
+  const lab = h("label", { for: id, text: label, title: "Double-tap to reset" });
+  lab.addEventListener("dblclick", () => { inp.value = def; set(def); upd(); scheduleRender(); });
+  return h("div", { class: "srow" }, h("div", { class: "shead" }, lab, out), inp);
+}
+const HUE_TRACK = "linear-gradient(90deg,#f33,#fd3,#3f6,#3df,#36f,#d3f,#f33)";
+const TEMP_TRACK = "linear-gradient(90deg,#4d86d9,#3a3a3a,#e0a040)";
+const adjSlider = (key, label, min = -100, max = 100, extra = {}) =>
+  slider({ id: "a-" + key, label, min, max, get: () => state.recipe.adj[key], set: v => { state.recipe.adj[key] = v; }, ...extra });
+
+function statusFor(t) {
+  const p = curPhoto(), f = p?.found?.[t.id];
+  const target = h("span", { class: "sw", title: "Your " + t.name.toLowerCase() }); target.style.background = t.hex;
+  if (!t.on) return [h("span", { text: "Off" })];
+  if (!f || f.C == null) {
+    return [h("span", { class: "sw empty" }), "→", target, h("span", { class: "pill warn", text: f?.how === "grey" ? "Too grey" : "Not found" }),
+      h("span", { text: f?.how === "grey" ? "Tap a more colorful spot." : "Tap it in the photo if it's there." })];
+  }
+  const was = h("span", { class: "sw", title: "In this photo" }); was.style.background = labHex(f.L, f.A, f.B);
+  return [was, "→", target, h("span", { class: "pill ok", text: f.how === "tap" ? "From your tap" : "Found" })];
+}
+function refreshStatus() {
+  if (state.tab !== "colors") return;
+  for (const el of document.querySelectorAll("[data-status]")) {
+    const t = state.recipe.palette.find(x => x.id === el.dataset.status); if (t) el.replaceChildren(...statusFor(t));
+  }
+}
+function colorCard(t) {
+  const p = curPhoto(), pk = p?.picks?.[t.id];
+  const sw = h("input", { type: "color", id: "c-" + t.id, value: t.hex, "aria-label": "Shade for " + t.name });
+  const hex = h("input", { class: "field hex", id: "h-" + t.id, value: t.hex.toUpperCase(), maxlength: 7, "aria-label": "Hex code for " + t.name, inputmode: "text", autocomplete: "off" });
+  sw.addEventListener("input", () => { t.hex = sw.value; hex.value = t.hex.toUpperCase(); scheduleRender(); schedulePresetThumbs(); });
+  hex.addEventListener("change", () => {
+    let v = hex.value.trim(); if (!v.startsWith("#")) v = "#" + v;
+    if (/^#[0-9a-f]{6}$/i.test(v)) { t.hex = v.toLowerCase(); sw.value = t.hex; hex.value = t.hex.toUpperCase(); scheduleRender(); schedulePresetThumbs(); }
+    else { hex.value = t.hex.toUpperCase(); toast("Use a 6-digit hex code, like #3F6F9F"); }
+  });
+  const name = h("input", { class: "field", id: "n-" + t.id, value: t.name, maxlength: 20, "aria-label": "Color name", oninput: e => { t.name = e.target.value; persist(); } });
+  const on = h("label", { class: "check" }, h("input", { type: "checkbox", id: "on-" + t.id, checked: t.on, onchange: e => { t.on = e.target.checked; scheduleRender(); renderPanel(); } }), "On");
+  const lower = (t.name || "this color").toLowerCase();
+  const card = h("div", { class: "ccard" + (t.on ? "" : " off") },
+    h("div", { class: "chead" }, sw, name, hex),
+    h("div", { class: "row" },
+      h("button", { class: "btn small primary", disabled: !t.on, text: p?.masks?.[t.id] ? "Edit painted area" : "Paint something " + lower, onclick: () => startPaint(t.id) }),
+      p?.masks?.[t.id] && h("button", { class: "btn ghost small", text: "Remove paint", onclick: () => { delete p.masks[t.id]; delete p.soft[t.id]; scheduleRender(); renderPanel(); } }),
+      p?.masks?.[t.id] && h("span", { class: "pill ok", text: "Painted" }),
+      on));
+  // Marker painted in Procreate / Photoshop
+  const mk = h("input", { type: "color", id: "mk-" + t.id, value: t.marker, "aria-label": "Marker color for " + t.name, style: "width:32px;height:32px;border:0;padding:0;background:none" });
+  mk.addEventListener("input", () => { t.marker = mk.value; scheduleRender(); renderPanel(); });
+  const mf = p?.markerFound?.[t.id];
+  card.append(h("label", { class: "check" },
+    h("input", { type: "checkbox", id: "mo-" + t.id, checked: t.markerOn, onchange: e => { t.markerOn = e.target.checked; scheduleRender(); renderPanel(); } }),
+    "I marked it in Procreate or Photoshop"));
+  if (t.markerOn) card.append(h("div", { class: "status" }, mk, h("span", { class: "val", text: t.marker.toUpperCase() }),
+    h("span", { class: "pill " + (mf ? "ok" : "warn"), text: mf ? "Marker found" : "No marker in this photo" }),
+    h("span", { text: "Anything this color becomes your " + lower + "." })));
+  // Optional: also move colors that are already close
+  card.append(h("label", { class: "check" },
+    h("input", { type: "checkbox", id: "au-" + t.id, checked: t.auto, onchange: e => { t.auto = e.target.checked; scheduleRender(); renderPanel(); } }),
+    "Also shift things that are already " + lower));
+  if (t.auto) card.append(
+    h("div", { class: "status", "data-status": t.id }, ...statusFor(t)),
+    h("div", { class: "row" },
+      h("button", { class: "btn small", text: pk ? "Tap again" : "Tap it in the photo", disabled: !t.on,
+        onclick: () => setTapMode({ kind: "pick", id: t.id, text: "Tap the " + lower + " object in the photo" }) }),
+      pk && h("button", { class: "btn ghost small", text: "Find it automatically", onclick: () => { delete p.picks[t.id]; scheduleRender(); renderPanel(); } })));
+  if (pk && t.auto) {
+    card.append(h("label", { class: "check" }, h("input", { type: "checkbox", id: "loc-" + t.id, checked: pk.local, onchange: e => { pk.local = e.target.checked; scheduleRender(); renderPanel(); } }),
+      "Only change it near my tap"));
+    if (pk.local) card.append(slider({ id: "rad-" + t.id, label: "Area size", min: 5, max: 70, def: 25, get: () => Math.round(pk.r * 100), set: v => { pk.r = v / 100; }, fmt: v => v + "%" }));
+  }
+  card.append(h("details", { class: "more" }, h("summary", { text: "Fine-tune" }),
+    slider({ id: "rg-" + t.id, label: "How wide a range of shades", min: 10, max: 60, def: 25, get: () => t.range, set: v => { t.range = v; }, fmt: v => v + "°" }),
+    slider({ id: "st-" + t.id, label: "Strength", min: 0, max: 100, def: 100, get: () => t.strength, set: v => { t.strength = v; }, fmt: v => v + "%" }),
+    slider({ id: "li-" + t.id, label: "Match its lightness too", min: 0, max: 100, def: 60, get: () => t.light, set: v => { t.light = v; }, fmt: v => v + "%" }),
+    h("p", { class: "note", text: "Lower lightness keeps the object's own light and shadow. 100% makes it exactly your shade." }),
+    h("div", { class: "row" },
+      h("button", { class: "btn ghost small", text: "Copy this shade from the photo", onclick: () => setTapMode({ kind: "eyedrop", id: t.id, text: "Tap the exact shade you want to use for " + (t.name || "this color").toLowerCase() }) }),
+      h("button", { class: "btn ghost small", text: "Remove color", style: "color:var(--danger)", onclick: () => { state.recipe.palette = state.recipe.palette.filter(x => x !== t); scheduleRender(); renderPanel(); } }))));
+  return card;
+}
+
+function renderPanel() {
+  const panel = $("#panel"); panel.replaceChildren(); panel.setAttribute("aria-labelledby", "tab-" + state.tab);
+  const r = state.recipe, p = curPhoto();
+  if (state.paint && p) {
+    const P = state.paint, t = r.palette.find(x => x.id === P.id);
+    if (!t) { state.paint = null; } else {
+      const sw = h("span", { class: "sw" }); sw.style.background = t.hex;
+      const tools = h("div", { class: "toolseg", role: "group", "aria-label": "Paint tool" },
+        [["select", "Tap to select"], ["brush", "Brush"], ["erase", "Erase"]].map(([id, l]) =>
+          h("button", { "aria-pressed": P.tool === id ? "true" : "false", text: l, onclick: () => { P.tool = id; renderPanel(); } })));
+      panel.append(h("div", { class: "sec" },
+        h("div", { class: "row" }, sw, h("strong", { text: "Painting " + (t.name || "this color").toLowerCase() }), h("span", { class: "note", text: "· " + p.name })),
+        h("p", { class: "note", text: P.tool === "select"
+          ? "Tap the object. Tap again to add more of it. Taps on similar colors spread across the whole object."
+          : P.tool === "brush" ? "Drag over parts the tap missed." : "Drag over anything that shouldn't change." }),
+        tools,
+        P.tool === "select"
+          ? slider({ id: "p-tol", label: "How similar", min: 3, max: 30, def: 10, get: () => P.tol, set: v => { P.tol = v; } })
+          : slider({ id: "p-size", label: "Brush size", min: 4, max: 80, def: 22, get: () => P.size, set: v => { P.size = v; } }),
+        h("label", { class: "check" }, h("input", { type: "checkbox", id: "p-show", checked: P.show, onchange: e => { P.show = e.target.checked; drawOverlay(); } }), "Show the selected area"),
+        h("div", { class: "row" },
+          h("button", { class: "btn small", text: "Undo", disabled: !P.undo.length, onclick: () => { const prev = P.undo.pop(); if (prev) { p.masks[P.id] = prev; finishOp(p); renderPanel(); } } }),
+          h("button", { class: "btn ghost small", text: "Clear", onclick: () => { P.undo.push(p.masks[P.id].slice()); p.masks[P.id].fill(0); finishOp(p); renderPanel(); } }),
+          h("button", { class: "btn primary small", text: "Done", onclick: endPaint }))));
+      return;
+    }
+  }
+  if (state.tab === "looks") {
+    const row = h("div", { class: "presets" });
+    for (const pr of PRESETS) {
+      const c = h("canvas"); presetCanvases[pr.id] = c;
+      row.append(h("button", { class: "preset", "aria-pressed": r.preset === pr.id ? "true" : "false", onclick: () => { r.preset = pr.id; scheduleRender(); renderPanel(); } },
+        c, h("span", { class: "code", text: pr.code }), h("span", { class: "nm", text: pr.name })));
+    }
+    panel.append(h("div", { class: "sec" }, row,
+      slider({ id: "strength", label: "Strength", min: 0, max: 100, def: 100, disabled: r.preset === "none", get: () => r.strength, set: v => { r.strength = v; }, fmt: v => v + "%" }),
+      h("p", { class: "note" }, "Your look goes on ", h("b", { text: "every photo" }), " in the strip at once. Your colors in the Colors tab are applied on top, so they stay exact whichever look you pick.")));
+    schedulePresetThumbs();
+  }
+  if (state.tab === "light") {
+    panel.append(h("div", { class: "sec" }, h("h3", { text: "1 · Fix the light in this photo" }),
+      h("p", { class: "note", text: "Tap something that should be white or grey: a cup, paper, a wall, a shirt, a sidewalk. This removes the yellow of indoor bulbs or the blue of shade before your colors are set." }),
+      h("div", { class: "row" },
+        h("button", { class: "btn small" + (p?.pre ? "" : " primary"), text: p?.pre ? "Tap a different spot" : "Tap something white or grey", onclick: () => setTapMode({ kind: "neutral", text: "Tap something that should be white or grey" }) }),
+        p?.pre && h("button", { class: "btn ghost small", text: "Undo", onclick: () => { p.pre = null; p.neutral = null; scheduleRender(); renderPanel(); } }),
+        p?.pre && h("span", { class: "pill ok", text: "Corrected" }))));
+    if (p) panel.append(h("div", { class: "sec" }, h("h3", { text: "2 · Small fixes, this photo only" }),
+      slider({ id: "n-exp", label: "Brightness", min: -100, max: 100, get: () => p.nudge.exposure, set: v => { p.nudge.exposure = v; } }),
+      slider({ id: "n-temp", label: "Warmth", min: -100, max: 100, track: TEMP_TRACK, get: () => p.nudge.temp, set: v => { p.nudge.temp = v; } })));
+    const m = r.match;
+    const sec = h("div", { class: "sec" }, h("h3", { text: "3 · Match the whole set (optional)" }),
+      h("p", { class: "note", text: "Pulls the overall brightness and color of every photo toward one reference, so the grid feels like one set. Use your favorite finished photo, or upload an old post." }),
+      h("div", { class: "row" },
+        h("button", { class: "btn small", text: "Match to this photo", onclick: matchCurrent }),
+        h("label", { class: "btn small", for: "refIn", text: "Upload a reference" }),
+        h("input", { id: "refIn", type: "file", accept: "image/*", hidden: true, onchange: e => e.target.files[0] && matchUpload(e.target.files[0]) })));
+    if (m) sec.append(
+      h("div", { class: "ref" }, h("img", { src: m.thumb, alt: "Reference" }), h("div", {}, h("strong", { text: "Reference" }), h("span", { class: "note", text: m.from })),
+        h("button", { class: "btn ghost small", text: "Remove", onclick: () => { r.match = null; scheduleRender(); schedulePresetThumbs(); renderPanel(); } })),
+      slider({ id: "m-str", label: "Match strength", min: 0, max: 100, def: 75, get: () => m.strength, set: v => { m.strength = v; }, fmt: v => v + "%" }),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "m-light", checked: m.light, onchange: e => { m.light = e.target.checked; scheduleRender(); } }), "Match brightness and contrast"),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "m-color", checked: m.color, onchange: e => { m.color = e.target.checked; scheduleRender(); } }), "Match overall color"));
+    panel.append(sec);
+  }
+  if (state.tab === "colors") {
+    panel.append(h("div", { class: "sec" },
+      h("p", { class: "note" }, "Your photo keeps its original colors. ", h("b", { text: "Only what you mark changes" }),
+        ": paint it here, or mark it in Procreate or Photoshop with the marker color. Either way it becomes your exact shade and keeps its own light and texture."),
+      ...r.palette.map(colorCard),
+      h("div", { class: "row" },
+        h("button", { class: "btn small", text: "Add a color", onclick: () => { r.palette.push(newColor("Color " + (r.palette.length + 1), "#a0704c")); scheduleRender(); renderPanel(); } }),
+        h("span", { class: "note", text: "Tap a swatch or type a hex code to set your shade." }))));
+  }
+  if (state.tab === "adjust") {
+    panel.append(
+      h("div", { class: "sec" }, h("h3", { text: "Light" }),
+        adjSlider("exposure", "Exposure", -100, 100, { fmt: v => (v > 0 ? "+" : "") + (v / 50).toFixed(1) + " EV" }),
+        adjSlider("contrast", "Contrast"), adjSlider("highlights", "Highlights"), adjSlider("shadows", "Shadows"), adjSlider("fade", "Fade", 0, 100)),
+      h("div", { class: "sec" }, h("h3", { text: "Color" }),
+        adjSlider("temp", "Temperature", -100, 100, { track: TEMP_TRACK }),
+        adjSlider("tint", "Tint", -100, 100, { track: "linear-gradient(90deg,#4caf50,#3a3a3a,#c94fc0)" }),
+        adjSlider("saturation", "Saturation"), adjSlider("vibrance", "Vibrance")),
+      h("div", { class: "sec" }, h("h3", { text: "Split tone" }),
+        adjSlider("shHue", "Shadow hue", 0, 359, { track: HUE_TRACK, def: 30, fmt: v => v + "°" }), adjSlider("shAmt", "Shadow tint", 0, 100),
+        adjSlider("hiHue", "Highlight hue", 0, 359, { track: HUE_TRACK, def: 45, fmt: v => v + "°" }), adjSlider("hiAmt", "Highlight tint", 0, 100)),
+      h("div", { class: "sec" }, h("h3", { text: "Skin" }),
+        adjSlider("skinProtect", "Keep skin natural", 0, 100),
+        h("p", { class: "note", text: "Lets faces and arms keep their real color while the look tints everything else." }),
+        adjSlider("skinTone", "Skin tone", -100, 100, { track: "linear-gradient(90deg,#d9768a,#3a3a3a,#e3b04f)", fmt: v => v === 0 ? "0" : v < 0 ? "Pinker " + -v : "Golden " + v }),
+        adjSlider("skinSat", "Skin saturation"), adjSlider("skinBright", "Skin brightness"),
+        h("label", { class: "check" }, h("input", { type: "checkbox", id: "showSkin", checked: !!state.showSkin, onchange: e => { state.showSkin = e.target.checked; drawOverlay(); } }), "Show what counts as skin")),
+      h("div", { class: "sec" }, h("h3", { text: "Effects" }), adjSlider("grain", "Grain", 0, 100), adjSlider("vignette", "Vignette", 0, 100)),
+      h("div", { class: "row" }, h("button", { class: "btn ghost small", text: "Reset adjustments", onclick: () => { r.adj = { ...ZERO }; scheduleRender(); renderPanel(); } }),
+        h("span", { class: "note", text: "These apply to every photo. Double-tap a label to reset one slider." })));
+  }
+  if (state.tab === "frame") {
+    const chips = h("div", { class: "chips" });
+    for (const [id, label] of [["original", "Original"], ["4:5", "4:5 portrait"], ["1:1", "1:1 square"], ["3:4", "3:4 tall"]])
+      chips.append(h("button", { class: "chip", "aria-pressed": state.crop === id ? "true" : "false", text: label, onclick: () => { if (state.crop === id) return; state.crop = id; persist(); renderPanel(); rebuildAll(); toast("Cropped. Re-do any taps or painting on these photos."); } }));
+    panel.append(h("div", { class: "sec" }, h("h3", { text: "Crop every photo" }), chips,
+      h("p", { class: "note", text: "Center crop, applied to the whole set. Choose it first, before tapping colors. 4:5 portrait fills the most screen in the Instagram feed." })));
+  }
+  if (state.tab === "recipes") {
+    panel.append(transitionSection());
+    const name = h("input", { class: "field", id: "rName", placeholder: "Name this recipe, e.g. Fall feed", maxlength: 40 });
+    panel.append(h("div", { class: "sec" }, h("h3", { text: "Save the current look" }),
+      h("div", { class: "row" }, name, h("button", { class: "btn primary small", text: "Save recipe", onclick: () => saveRecipe(name.value) })),
+      h("p", { class: "note", text: "A recipe keeps your look, your colors, Match and crop. " + "It's saved on this device. Use Back up to keep a copy or move recipes to another phone." })));
+    const list = h("div", { class: "sec" }, h("h3", { text: "Your recipes" }));
+    if (!state.recipes.length) list.append(h("p", { class: "note", text: "No recipes yet. Set your look and colors, name it, and save it here." }));
+    for (const rc of state.recipes) {
+      const pr = presetById(rc.recipe.preset), cols = (rc.recipe.palette || []).filter(t => t.on);
+      const del = h("button", { class: "btn ghost small", text: "Delete" });
+      del.onclick = () => {
+        if (del.dataset.armed) { deleteRecipe(rc.id); return; }
+        del.dataset.armed = "1"; del.textContent = "Tap to confirm"; del.style.color = "var(--danger)";
+        setTimeout(() => { if (del.isConnected) { delete del.dataset.armed; del.textContent = "Delete"; del.style.color = ""; } }, 3000);
+      };
+      const dots = h("span", { class: "row", style: "gap:3px" }, cols.map(t => { const d = h("span", { class: "sw", style: "width:14px;height:14px" }); d.style.background = t.hex; return d; }));
+      list.append(h("div", { class: "recipe" },
+        h("div", { class: "meta" }, h("strong", { text: rc.name }), h("span", { text: pr.code + " " + pr.name + (rc.recipe.preset !== "none" ? " " + rc.recipe.strength + "%" : "") + (rc.recipe.match ? " · match" : "") + " · " + rc.crop }), dots),
+        h("button", { class: "btn small", text: "Apply", onclick: () => applyRecipe(rc) }), del));
+    }
+    panel.append(list);
+    panel.append(h("div", { class: "sec" }, h("h3", { text: "Back up" }),
+      h("div", { class: "row" },
+        h("button", { class: "btn small", text: "Back up recipes", disabled: !state.recipes.length, onclick: backupRecipes }),
+        h("label", { class: "btn small", for: "restoreIn", text: "Restore from a backup" }),
+        h("input", { id: "restoreIn", type: "file", accept: "application/json,.json", hidden: true, onchange: e => e.target.files[0] && restoreRecipes(e.target.files[0]) })),
+      h("p", { class: "note", text: "Saves a small file with all your recipes. Keep it in Files or iCloud Drive." })));
+  }
+}
+
+/* ---------- match ---------- */
+function thumbDataURL(imgData) {
+  const c = document.createElement("canvas"), k = Math.min(1, 96 / Math.max(imgData.width, imgData.height));
+  const t = document.createElement("canvas"); t.width = imgData.width; t.height = imgData.height; t.getContext("2d").putImageData(imgData, 0, 0);
+  c.width = Math.round(imgData.width * k); c.height = Math.round(imgData.height * k); c.getContext("2d").drawImage(t, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", .8);
+}
+function matchCurrent() {
+  const p = curPhoto(); if (!p) return;
+  const A = analyze(p), tmp = new ImageData(p.thumb.width, p.thumb.height);
+  processImage(p.thumb, tmp, A.P, { ...A.opts, match: null, fx: false });
+  state.recipe.match = { ref: imageStats(tmp), strength: state.recipe.match?.strength ?? 75, light: true, color: true, thumb: thumbDataURL(tmp), from: p.name + ", as edited" };
+  scheduleRender(); schedulePresetThumbs(); renderPanel(); toast("Matching every photo to " + p.name);
+}
+async function matchUpload(file) {
+  try {
+    const src = await decode({ file }), [W, H] = dims(src);
+    const d = drawTo(src, { x: 0, y: 0, w: W, h: H }, Math.min(1, THUMB / Math.max(W, H))).data;
+    state.recipe.match = { ref: imageStats(d), strength: state.recipe.match?.strength ?? 75, light: true, color: true, thumb: thumbDataURL(d), from: file.name };
+    scheduleRender(); schedulePresetThumbs(); renderPanel(); toast("Matching every photo to your reference");
+  } catch (e) { toast("That image couldn't be opened. Try a JPEG or PNG."); }
+}
+
+/* ---------- easing back to natural ---------- */
+const NATURAL_END = () => ({ preset: "none", strength: 100, adj: { ...ZERO, highlights: -10, shadows: 8, fade: 6, saturation: -8, temp: -3, grain: 5 }, match: null, palette: null, natural: true });
+let transition = LS.get("safelight:transition", null);
+function saveTransition() {
+  LS.set("safelight:transition", transition);
+  if (Store.col) Store.col.doc("transition").set(transition ? { kind: "transition", ...transition } : { kind: "transition", off: true }).catch(() => {});
+}
+const lerp = (a, b, t) => a + (b - a) * t;
+function mixHex(a, b, t) { const P = hexLab(a), Q = hexLab(b); return labHex(lerp(P.L, Q.L, t), lerp(P.A, Q.A, t), lerp(P.B, Q.B, t)); }
+function blendRecipe(ra, rb, t) {
+  const ea = effective({ ...ra, adj: { ...ZERO, ...ra.adj } }), eb = effective({ ...rb, adj: { ...ZERO, ...rb.adj } }), adj = {};
+  for (const k in ZERO) adj[k] = k === "shHue" ? (ea.shAmt > 0 ? ea.shHue : eb.shHue) : k === "hiHue" ? (ea.hiAmt > 0 ? ea.hiHue : eb.hiHue) : Math.round(lerp(ea[k], eb[k], t));
+  const bp = rb.palette || [];
+  const palette = (ra.palette || []).map(a => {
+    const b = bp.find(x => x.id === a.id || x.name === a.name);
+    const endS = b ? b.strength : (rb.natural ? 35 : 0), endL = b ? b.light : (rb.natural ? 30 : a.light);
+    return { ...a, hex: b ? mixHex(a.hex, b.hex, t) : a.hex, strength: Math.round(lerp(a.strength, endS, t)), light: Math.round(lerp(a.light, endL, t)) };
+  });
+  for (const b of bp) if (!palette.some(x => x.id === b.id || x.name === b.name)) palette.push({ ...b, strength: Math.round(b.strength * t) });
+  let match = null; const ma = ra.match, mb = rb.match;
+  if (ma || mb) { match = { ...(ma || mb), strength: Math.round(lerp(ma ? ma.strength : 0, mb ? mb.strength : 0, t)) }; if (!match.strength) match = null; }
+  return { preset: "none", strength: 100, adj, match, palette };
+}
+const tRecipe = step => blendRecipe(transition.from, transition.to, transition.steps ? step / transition.steps : 1);
+function applyStep() {
+  state.recipe = JSON.parse(JSON.stringify(tRecipe(transition.step)));
+  persist(); scheduleRender(); schedulePresetThumbs(); renderPanel();
+}
+function withRecipe(rec, fn) { const keep = state.recipe; state.recipe = rec; try { return fn(); } finally { state.recipe = keep; } }
+function renderTransitionPreviews(strip) {
+  const p = curPhoto(); if (!p?.mini || !transition) return;
+  for (let s = 0; s <= transition.steps; s++) {
+    const c = strip.children[s]?.querySelector("canvas"); if (!c) continue;
+    withRecipe(tRecipe(s), () => {
+      const A = analyze(p), out = new ImageData(p.mini.width, p.mini.height);
+      processImage(p.mini, out, A.P, { ...A.opts, fx: false });
+      c.width = out.width; c.height = out.height; c.getContext("2d").putImageData(out, 0, 0);
+    });
+  }
+  analyze(p);
+}
+function transitionSection() {
+  const sec = h("div", { class: "sec" }, h("h3", { text: "Ease back to natural" }));
+  if (!transition) {
+    sec.append(h("p", { class: "note", text: "Step your next posts from your current edit back to a natural look a little at a time, so the grid changes gradually instead of all at once." }));
+    const opts = state.recipes.map(rc => h("option", { value: rc.id, text: rc.name }));
+    const from = h("select", { class: "field", id: "t-from" }, h("option", { value: "current", text: "My current look" }), opts);
+    const to = h("select", { class: "field", id: "t-to" }, h("option", { value: "natural", text: "Natural (built in)" }), state.recipes.map(rc => h("option", { value: rc.id, text: rc.name })));
+    let steps = 6; const chips = h("div", { class: "chips" });
+    const paint = () => chips.replaceChildren(...[3, 6, 9, 12].map(n => h("button", { class: "chip", "aria-pressed": n === steps ? "true" : "false", text: n + " posts", onclick: () => { steps = n; paint(); } })));
+    paint();
+    sec.append(h("label", { class: "note", for: "t-from", text: "From" }), from, h("label", { class: "note", for: "t-to", text: "To" }), to,
+      h("p", { class: "note", text: "Over the next" }), chips,
+      h("div", { class: "row" }, h("button", { class: "btn primary small", text: "Start the transition", onclick: () => {
+        const pick = v => v === "current" ? JSON.parse(JSON.stringify(state.recipe)) : v === "natural" ? NATURAL_END() : JSON.parse(JSON.stringify(state.recipes.find(r => r.id === v)?.recipe || state.recipe));
+        transition = { from: pick(from.value), to: pick(to.value), steps, step: 1, fromName: from.selectedOptions[0].text, toName: to.selectedOptions[0].text };
+        saveTransition(); applyStep(); toast("Post 1 of " + steps + " is ready to edit");
+      } })));
+    return sec;
+  }
+  const T = transition, strip = h("div", { class: "tstrip" });
+  for (let s = 0; s <= T.steps; s++)
+    strip.append(h("button", { class: "tstep", "aria-current": s === T.step ? "true" : "false", "aria-label": s === 0 ? "Where you started" : "Post " + s,
+      onclick: () => { T.step = s; saveTransition(); applyStep(); } }, h("canvas"), h("span", { text: s === 0 ? "Now" : String(s) })));
+  sec.append(
+    h("p", { class: "note" }, h("b", { text: T.step === 0 ? "Your starting look" : "Post " + T.step + " of " + T.steps }), " · " + T.fromName + " → " + T.toName),
+    strip,
+    h("div", { class: "row" },
+      h("button", { class: "btn small", text: "Previous", disabled: T.step <= 0, onclick: () => { T.step--; saveTransition(); applyStep(); } }),
+      h("button", { class: "btn primary small", text: T.step >= T.steps ? "Finished" : "Next post", disabled: T.step >= T.steps, onclick: () => { T.step++; saveTransition(); applyStep(); toast("Post " + T.step + " of " + T.steps); } }),
+      h("button", { class: "btn ghost small", text: "Reset this step", onclick: applyStep }),
+      h("button", { class: "btn ghost small", text: "End transition", onclick: () => { transition = null; saveTransition(); renderPanel(); toast("Transition ended. Your current look stays."); } })),
+    h("p", { class: "note", text: "One step per post: edit and save it, then tap Next post. Painting and the blue fade a little each step, and you can still tweak any photo." }));
+  requestAnimationFrame(() => renderTransitionPreviews(strip));
+  return sec;
+}
+
+/* ---------- recipes store ---------- */
+const Store = {
+  mode: "local", col: null,
+  async init() {
+    try {
+      if (!window.claude?.use) return;
+      const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
+      if (!db || !user) return;
+      const id = await user.id(); if (!id) return;
+      this.col = db.collection("data/users/" + id); this.mode = "cloud";
+    } catch (e) {}
+  },
+  local() { return LS.get("safelight:recipes", []); },
+  async list() {
+    if (this.col) {
+      try {
+        const snap = await this.col.get();
+        const cloud = snap.docs.filter(d => d.exists && d.data().kind === "recipe").map(d => ({ id: d.id, ...d.data() }));
+        const ids = new Set(cloud.map(c => c.id));
+        for (const l of this.local()) if (!ids.has(l.id)) { cloud.push(l); this.col.doc(l.id).set(l).catch(() => {}); }
+        return cloud.sort((a, b) => b.createdAt - a.createdAt);
+      } catch (e) {}
+    }
+    return this.local().sort((a, b) => b.createdAt - a.createdAt);
+  },
+  async save(rc) { LS.set("safelight:recipes", [rc, ...this.local().filter(x => x.id !== rc.id)]); if (this.col) await this.col.doc(rc.id).set(rc); },
+  async remove(id) { LS.set("safelight:recipes", this.local().filter(x => x.id !== id)); if (this.col) await this.col.doc(id).delete(); },
+};
+async function saveRecipe(name) {
+  name = (name || "").trim() || "Recipe " + (state.recipes.length + 1);
+  const rc = { kind: "recipe", id: uid(), name, recipe: JSON.parse(JSON.stringify(state.recipe)), crop: state.crop, createdAt: Date.now() };
+  state.recipes.unshift(rc); renderPanel();
+  try { await Store.save(rc); toast("Saved " + name); }
+  catch (e) { toast(e?.code === "quota_exceeded" ? "Storage is full. Delete an old recipe and try again." : "Saved in this browser only."); }
+}
+async function deleteRecipe(id) {
+  state.recipes = state.recipes.filter(x => x.id !== id); renderPanel();
+  try { await Store.remove(id); } catch (e) {}
+  toast("Recipe deleted");
+}
+function applyRecipe(rc) {
+  state.recipe = JSON.parse(JSON.stringify(rc.recipe));
+  state.recipe.adj = { ...ZERO, ...state.recipe.adj };
+  if (!Array.isArray(state.recipe.palette)) state.recipe.palette = [];
+  upgradePalette(state.recipe.palette);
+  const cropChanged = rc.crop && rc.crop !== state.crop; if (rc.crop) state.crop = rc.crop;
+  persist(); toast("Applied " + rc.name);
+  if (cropChanged) rebuildAll(); else { scheduleRender(); schedulePresetThumbs(); renderPanel(); }
+}
+
+/* ---------- export ---------- */
+async function renderExport(photo) {
+  const src = await decode(photo), [W, H] = dims(src), rect = cropRect(W, H, state.crop);
+  const scale = state.size === "ig" ? Math.min(1, 1080 / rect.w) : Math.min(1, Math.sqrt(16e6 / (rect.w * rect.h)));
+  const d = drawTo(src, rect, scale);
+  if (!photo.sample && src.close) src.close();
+  const A = analyze(photo);
+  processImage(d.data, d.data, A.P, { ...A.opts, fx: true, grainScale: Math.max(1, Math.max(d.data.width, d.data.height) / 1100) });
+  d.ctx.putImageData(d.data, 0, 0);
+  return await new Promise(res => d.canvas.toBlob(res, "image/jpeg", .92));
+}
+const outName = p => "safelight-" + p.name.replace(/\.[^.]+$/, "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() + ".jpg";
+const canShareFiles = files => { try { return !!(navigator.canShare && navigator.canShare({ files })); } catch (e) { return false; } };
+function downloadBlob(name, blob) {
+  const url = URL.createObjectURL(blob), a = h("a", { href: url, download: name });
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+function openSheet(kids) { const s = $("#sheet"); s.replaceChildren(h("div", { class: "sheet", role: "dialog", "aria-modal": "true" }, kids)); s.hidden = false; }
+function closeSheet() { $("#sheet").hidden = true; }
+$("#sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeSheet(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { closeSheet(); setTapMode(null); } });
+
+// Rendering takes a moment, and phones only open the share sheet straight from a tap,
+// so saving is two taps: prepare, then save.
+function openSaveSheet() {
+  const n = state.photos.length, status = h("p", { class: "note", "aria-live": "polite" });
+  const sizeSeg = h("div", { class: "chips" });
+  const paintSize = () => { sizeSeg.replaceChildren(...[["ig", "Instagram size (1080 wide)"], ["full", "Full size"]].map(([id, l]) =>
+    h("button", { class: "chip", "aria-pressed": state.size === id ? "true" : "false", text: l, onclick: () => { state.size = id; paintSize(); reset(); } }))); };
+  paintSize();
+  let ready = null;
+  const go = h("div", { class: "stack" });
+  const prep = async which => {
+    const list = which === "one" ? [curPhoto()] : state.photos.slice();
+    go.querySelectorAll("button").forEach(b => b.disabled = true);
+    const files = [], used = new Set();
+    for (let i = 0; i < list.length; i++) {
+      status.textContent = list.length > 1 ? `Rendering ${i + 1} of ${list.length}…` : "Rendering…";
+      let nm = outName(list[i]); while (used.has(nm)) nm = nm.replace(/\.jpg$/, "-" + i + ".jpg"); used.add(nm);
+      files.push(new File([await renderExport(list[i])], nm, { type: "image/jpeg" }));
+    }
+    ready = files; status.textContent = ""; paintGo();
+  };
+  const save = async () => {
+    const files = ready;
+    if (canShareFiles(files)) {
+      try { await navigator.share({ files }); status.textContent = "Done."; }
+      catch (e) { status.textContent = e?.name === "AbortError" ? "Save cancelled." : "That didn't go through. Tap Save again."; }
+      return;
+    }
+    if (files.length > 3 && window.JSZip) {
+      status.textContent = "Packing a .zip…";
+      const z = new JSZip(); files.forEach(f => z.file(f.name, f));
+      downloadBlob("safelight-photos.zip", await z.generateAsync({ type: "blob" }));
+    } else files.forEach(f => downloadBlob(f.name, f));
+    status.textContent = "Downloaded.";
+  };
+  const reset = () => { ready = null; paintGo(); };
+  function paintGo() {
+    if (ready) {
+      const lbl = ready.length > 1 ? `Save ${ready.length} photos` : "Save photo";
+      go.replaceChildren(h("button", { class: "btn primary", text: lbl, onclick: save }),
+        h("p", { class: "note", text: canShareFiles(ready) ? "On iPhone, choose Save Image (or Save " + ready.length + " Images) to put them in Photos." : "They'll go to your downloads." }),
+        h("button", { class: "btn ghost", text: "Start over", onclick: reset }));
+    } else {
+      go.replaceChildren(h("button", { class: "btn primary", text: "Prepare this photo", onclick: () => prep("one") }),
+        n > 1 && h("button", { class: "btn", text: `Prepare all ${n} photos`, onclick: () => prep("all") }));
+    }
+  }
+  paintGo();
+  openSheet([h("h2", { text: "Save photos" }),
+    h("div", { class: "stack" }, h("h3", { class: "note", text: "Size" }), sizeSeg),
+    go, status, h("button", { class: "btn ghost", text: "Close", onclick: closeSheet })]);
+}
+$("#saveBtn").onclick = openSaveSheet;
+
+async function backupRecipes() {
+  const blob = new Blob([JSON.stringify({ app: "safelight", version: 1, recipes: state.recipes, transition }, null, 1)], { type: "application/json" });
+  const file = new File([blob], "safelight-recipes.json", { type: "application/json" });
+  if (canShareFiles([file])) { try { await navigator.share({ files: [file] }); } catch (e) {} return; }
+  downloadBlob(file.name, file);
+}
+async function restoreRecipes(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.recipes)) throw 0;
+    let added = 0;
+    for (const rc of data.recipes) {
+      if (!rc?.recipe || state.recipes.some(x => x.id === rc.id)) continue;
+      await Store.save(rc); state.recipes.push(rc); added++;
+    }
+    state.recipes.sort((a, b) => b.createdAt - a.createdAt);
+    renderPanel(); toast(added ? `Restored ${added} recipe${added > 1 ? "s" : ""}` : "Those recipes are already here");
+  } catch (e) { toast("That file isn't a Safelight backup."); }
+}
+
+/* ---------- add photos ---------- */
+$("#fileIn").addEventListener("change", async e => {
+  const files = [...e.target.files]; e.target.value = ""; if (!files.length) return;
+  if (state.photos.every(p => p.isSample)) state.photos = [];
+  const start = state.photos.length; let failed = 0;
+  toast(`Opening ${files.length} photo${files.length > 1 ? "s" : ""}…`);
+  for (const f of files) {
+    const p = { id: uid(), name: f.name, file: f };
+    try { await buildBase(p); state.photos.push(p); state.cur = state.photos.length - 1; renderStrip(); renderMain(); }
+    catch (err) { failed++; }
+  }
+  if (!state.photos.length) await loadSamples();
+  state.cur = Math.min(start, state.photos.length - 1);
+  renderAll();
+  if (failed) toast(`${failed} file${failed > 1 ? "s" : ""} couldn't be opened. Try JPEG, PNG or HEIC.`);
+});
+
+/* ---------- boot ---------- */
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("/sw.js").catch(() => {});
+(async function boot() {
+  renderTabs();
+  await loadSamples();
+  renderAll();
+  state.recipes = await Store.list();
+  if (state.tab === "recipes") renderPanel();
+  await Store.init();
+  if (Store.mode === "cloud") {
+    state.recipes = await Store.list();
+    try {
+      const d = await Store.col.doc("transition").get();
+      if (d.exists) { const v = d.data(); transition = v.off ? null : { from: v.from, to: v.to, steps: v.steps, step: v.step, fromName: v.fromName, toName: v.toName }; LS.set("safelight:transition", transition); }
+      else if (transition) saveTransition();
+    } catch (e) {}
+    if (state.tab === "recipes") renderPanel();
+  }
+})();
+</script>
+
+</body>
+</html>
