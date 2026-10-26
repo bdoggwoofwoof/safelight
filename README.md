@@ -7,6 +7,8 @@ A personal photo editor for a consistent Instagram feed. Static web app: no buil
 - **Adjust** — light, color, split tone, skin tone, grain
 - **Recipes** — save looks, back up / restore your palette and recipes, and ease the feed back to natural over several posts
 
+Photos and painted areas are kept on the device between visits (IndexedDB). Export is full resolution up to 50 MP, encoded in strips by `jpeg.js` so it isn't limited by Safari's canvas size, and kept in Display P3 (with an embedded profile) where the browser supports it.
+
 Deploy: import this repo in Vercel (framework preset "Other", no build command). Then on iPhone open the site in Safari → Share → Add to Home Screen.
 
 When you change files, bump `VERSION` in `sw.js` so phones pick up the new version.

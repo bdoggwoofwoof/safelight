@@ -14,6 +14,7 @@
 <link rel="icon" href="/icons/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <script src="/vendor/jszip.min.js" defer></script>
+<script src="/jpeg.js" defer></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap">
 <style>
@@ -251,37 +252,48 @@ const TO_LIN = new Float32Array(4096), GN = 16383, TO_GAM = new Float32Array(GN 
 for (let i = 0; i < 4096; i++) TO_LIN[i] = Math.pow(i / 4095, 2.2);
 for (let i = 0; i <= GN; i++) TO_GAM[i] = Math.pow(i / GN, 1 / 2.2);
 const LAB = new Float32Array(3), RGB = new Float32Array(3);
-function rgb2lab(r, g, b) {
-  r = TO_LIN[r <= 0 ? 0 : r >= 1 ? 4095 : (r * 4095) | 0];
-  g = TO_LIN[g <= 0 ? 0 : g >= 1 ? 4095 : (g * 4095) | 0];
-  b = TO_LIN[b <= 0 ? 0 : b >= 1 ? 4095 : (b * 4095) | 0];
-  const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
-  const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
-  const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
-  LAB[0] = .2104542553 * l + .7936177850 * m - .0040720468 * s;
-  LAB[1] = 1.9779984951 * l - 2.4285922050 * m + .4505937099 * s;
-  LAB[2] = .0259040371 * l + .7827717662 * m - .8086757660 * s;
+// OKLab from linear RGB with the given primaries (rows map linear RGB to LMS), and back.
+function makeLab(M, N) {
+  const [m0, m1, m2, m3, m4, m5, m6, m7, m8] = M, [n0, n1, n2, n3, n4, n5, n6, n7, n8] = N;
+  return [function (r, g, b) {
+    r = TO_LIN[r <= 0 ? 0 : r >= 1 ? 4095 : (r * 4095) | 0];
+    g = TO_LIN[g <= 0 ? 0 : g >= 1 ? 4095 : (g * 4095) | 0];
+    b = TO_LIN[b <= 0 ? 0 : b >= 1 ? 4095 : (b * 4095) | 0];
+    const l = Math.cbrt(m0 * r + m1 * g + m2 * b), m = Math.cbrt(m3 * r + m4 * g + m5 * b), s = Math.cbrt(m6 * r + m7 * g + m8 * b);
+    LAB[0] = .2104542553 * l + .7936177850 * m - .0040720468 * s;
+    LAB[1] = 1.9779984951 * l - 2.4285922050 * m + .4505937099 * s;
+    LAB[2] = .0259040371 * l + .7827717662 * m - .8086757660 * s;
+  }, function (L, A, B) {
+    let l = L + .3963377774 * A + .2158037573 * B, m = L - .1055613458 * A - .0638541728 * B, s = L - .0894841775 * A - 1.2914855480 * B;
+    l = l * l * l; m = m * m * m; s = s * s * s;
+    const r = n0 * l + n1 * m + n2 * s, g = n3 * l + n4 * m + n5 * s, b = n6 * l + n7 * m + n8 * s;
+    RGB[0] = TO_GAM[r <= 0 ? 0 : r >= 1 ? GN : (r * GN) | 0];
+    RGB[1] = TO_GAM[g <= 0 ? 0 : g >= 1 ? GN : (g * GN) | 0];
+    RGB[2] = TO_GAM[b <= 0 ? 0 : b >= 1 ? GN : (b * GN) | 0];
+  }];
 }
-function lab2rgb(L, A, B) {
-  let l = L + .3963377774 * A + .2158037573 * B, m = L - .1055613458 * A - .0638541728 * B, s = L - .0894841775 * A - 1.2914855480 * B;
-  l = l * l * l; m = m * m * m; s = s * s * s;
-  const r = 4.0767416621 * l - 3.3077115913 * m + .2309699292 * s;
-  const g = -1.2684380046 * l + 2.6097574011 * m - .3413193965 * s;
-  const b = -.0041960863 * l - .7034186147 * m + 1.7076147010 * s;
-  RGB[0] = TO_GAM[r <= 0 ? 0 : r >= 1 ? GN : (r * GN) | 0];
-  RGB[1] = TO_GAM[g <= 0 ? 0 : g >= 1 ? GN : (g * GN) | 0];
-  RGB[2] = TO_GAM[b <= 0 ? 0 : b >= 1 ? GN : (b * GN) | 0];
-}
+const [srgb2lab, lab2srgb] = makeLab(
+  [.4122214708, .5363325363, .0514459929, .2119034982, .6806995451, .1073969566, .0883024619, .2817188376, .6299787005],
+  [4.0767416621, -3.3077115913, .2309699292, -1.2684380046, 2.6097574011, -.3413193965, -.0041960863, -.7034186147, 1.7076147010]);
+// iPhone photos are Display P3. Where the browser can keep P3 in a canvas, Safelight works in P3 so vivid colors
+// aren't clipped; your hex codes (sRGB) are converted through OKLab, so they stay exact either way.
+const P3 = (() => { try { const c = document.createElement("canvas").getContext("2d", { colorSpace: "display-p3" }); return c?.getContextAttributes?.().colorSpace === "display-p3"; } catch (e) { return false; } })();
+const CS = P3 ? "display-p3" : "srgb";
+const [rgb2lab, lab2rgb] = P3 ? makeLab(
+  [.4813798544, .4621183697, .0565017758, .2288319449, .6532168128, .1179512422, .0839457557, .2241652689, .6918889754],
+  [3.1277689867, -2.2571357955, .1293668086, -1.0910090474, 2.4133317583, -.3223227107, -.0260108132, -.5080413257, 1.5340521389]) : [srgb2lab, lab2srgb];
+const newImg = (w, hh) => P3 ? new ImageData(w, hh, { colorSpace: CS }) : new ImageData(w, hh);
+const ctx2d = (c, o = {}) => c.getContext("2d", { ...o, colorSpace: CS });
 const LABCACHE = {};
 function hexLab(hex) {
   if (LABCACHE[hex]) return LABCACHE[hex];
   const n = parseInt(hex.slice(1), 16);
-  rgb2lab(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
+  srgb2lab(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
   const L = LAB[0], A = LAB[1], B = LAB[2];
   return LABCACHE[hex] = { L, A, B, C: Math.hypot(A, B), h: Math.atan2(B, A) };
 }
 const toHex = (r, g, b) => "#" + [r, g, b].map(v => Math.round(clamp01(v) * 255).toString(16).padStart(2, "0")).join("");
-function labHex(L, A, B) { lab2rgb(L, A, B); return toHex(RGB[0], RGB[1], RGB[2]); }
+function labHex(L, A, B) { lab2srgb(L, A, B); return toHex(RGB[0], RGB[1], RGB[2]); }
 
 /* ---------- looks ---------- */
 const ZERO = { exposure:0, contrast:0, highlights:0, shadows:0, fade:0, temp:0, tint:0, saturation:0, vibrance:0, shAmt:0, shHue:30, hiAmt:0, hiHue:45, grain:0, vignette:0,
@@ -366,21 +378,22 @@ function hash(x, y) {
   return ((n ^ (n >>> 16)) & 0xffff) / 65535;
 }
 function processImage(src, dst, P, opt) {
-  const s = src.data, d = dst.data, w = src.width, hgt = src.height, lut = P.lut;
+  // opt.oy / opt.fullH: this is a strip of a taller image starting at row oy (used by the full-size export).
+  const s = src.data, d = dst.data, w = src.width, hgt = src.height, lut = P.lut, H = opt.fullH || hgt, oy = opt.oy || 0;
   const pre = opt.pre || [1, 1, 1];
   const wbR = (1 + .14 * P.temp + .04 * P.tint) * pre[0], wbG = (1 - .10 * P.tint) * pre[1], wbB = (1 - .14 * P.temp + .04 * P.tint) * pre[2];
   const sat = 1 + P.saturation, vib = P.vibrance, doSat = sat !== 1 || vib !== 0;
   const X = opt.match, split = P.split, PAL = opt.palette;
   let nKeys = 0;
-  const PNT = opt.paints ? opt.paints.map(t => t.key ? { ...t, ki: nKeys++ } : { ...t, sx: (t.mw - 1) / Math.max(1, w - 1), sy: (t.mh - 1) / Math.max(1, hgt - 1) }) : null;
+  const PNT = opt.paints ? opt.paints.map(t => t.key ? { ...t, ki: nKeys++ } : { ...t, sx: (t.mw - 1) / Math.max(1, w - 1), sy: (t.mh - 1) / Math.max(1, H - 1) }) : null;
   const KEYS = PNT ? PNT.filter(t => t.key) : [], kw = new Float32Array(Math.max(1, nKeys)), skinOn = P.skinOn;
   const nu = opt.nudge, doNudge = !!(nu && (nu.exposure || nu.temp));
   const ne = doNudge ? Math.pow(2, nu.exposure / 100 * .9) : 1;
   const nr = ne * (1 + (doNudge ? nu.temp : 0) / 100 * .12), nb = ne * (1 - (doNudge ? nu.temp : 0) / 100 * .12);
   const doVig = opt.fx && P.vignette > 0, doGrain = opt.fx && P.grain > 0;
-  const cx = w / 2, cy = hgt / 2, gs = opt.grainScale || 1, vigK = P.vignette * .75, grK = P.grain * .16, aspect = hgt / w;
+  const cx = w / 2, cy = H / 2, gs = opt.grainScale || 1, vigK = P.vignette * .75, grK = P.grain * .16, aspect = H / w;
   for (let y = 0; y < hgt; y++) {
-    const dy = (y - cy) / cy, gy = (y / gs) | 0, ny = y / hgt;
+    const yy = y + oy, dy = (yy - cy) / cy, gy = (yy / gs) | 0, ny = yy / H;
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
       let sL = 0, sa = 0, sbb = 0, sk = 0;
@@ -458,7 +471,7 @@ function processImage(src, dst, P, opt) {
           let v;
           if (t.key) v = kw[t.ki];
           else {
-            const fx = x * t.sx, fy = y * t.sy;
+            const fx = x * t.sx, fy = yy * t.sy;
             let x0 = fx | 0, y0 = fy | 0;
             if (x0 > t.mw - 2) x0 = t.mw - 2; if (y0 > t.mh - 2) y0 = t.mh - 2; if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
             const ax = clamp01(fx - x0), ay = clamp01(fy - y0), m = t.m, j = y0 * t.mw + x0;
@@ -608,7 +621,7 @@ const curPhoto = () => state.photos[state.cur];
 // Everything the photo needs, computed on its small thumbnail so it's identical at every size.
 function analyze(photo, opts = {}) {
   const P = compile(effective(state.recipe)), pre = photo.pre || null, th = photo.thumb;
-  const tmp = new ImageData(th.width, th.height);
+  const tmp = newImg(th.width, th.height);
   let match = null; const m = state.recipe.match;
   if (m && (m.light || m.color)) { processImage(th, tmp, P, { pre, fx: false }); match = buildXform(imageStats(tmp), m); }
   let found = {};
@@ -751,15 +764,19 @@ function smartSelect(p, pt, tol, mask) {
 function stamp(p, mask, cx, cy, r, erase, seed, tol) {
   const w = p.base.width, hh = p.base.height, lab = seed ? labOf(p) : null, T = (tol || 10) / 100;
   const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r)), y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(hh - 1, Math.ceil(cy + r));
+  let inner = 0, kept = 0;
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
     const d = Math.hypot(x - cx, y - cy) / r; if (d >= 1) continue;
     let v = 255 * (1 - ss(.6, 1, d)); const j = y * w + x;
+    if (d < .6) inner++;
     if (seed) {
       v *= 1 - ss(T * .8, T * 1.4, Math.sqrt(shadeDist2(lab, j * 3, seed)));
       if (v < 1) continue;
     }
+    if (d < .6 && v > 128) kept++;
     mask[j] = erase ? Math.min(mask[j], 255 - v) : Math.max(mask[j], v);
   }
+  return [inner, kept];
 }
 let ovData = null;
 function drawOverlay() {
@@ -783,7 +800,7 @@ function drawOverlay() {
     const m = p.masks[P.id];
     for (let j = 0; j < m.length; j++) { const i = j * 4; d[i] = 242; d[i + 1] = 160; d[i + 2] = 78; d[i + 3] = m[j] * .42; }
   }
-  ov.getContext("2d").putImageData(ovData, 0, 0); ov.hidden = false;
+  ctx2d(ov).putImageData(ovData, 0, 0); ov.hidden = false;
 }
 function startPaint(id) {
   const p = curPhoto(); if (!p) return;
@@ -801,8 +818,9 @@ function endPaint() {
   stage.classList.remove("painting"); $("#ov").hidden = true; $("#hint").hidden = state.view === "feed";
   scheduleRender(); schedulePresetThumbs(); renderPanel();
 }
-function finishOp(p) {
-  const id = state.paint.id, w = p.base.width, hh = p.base.height, m = p.masks[id], grown = new Uint8Array(m.length);
+function finishOp(p, id = state.paint.id) {
+  p.dirty = true;
+  const w = p.base.width, hh = p.base.height, m = p.masks[id], grown = new Uint8Array(m.length);
   for (let j = 0; j < m.length; j++) {   // grow 1px so no halo of the old color is left at the edges
     const x = j % w; let v = m[j];
     if (x > 0 && m[j - 1] > v) v = m[j - 1]; if (x < w - 1 && m[j + 1] > v) v = m[j + 1];
@@ -812,7 +830,8 @@ function finishOp(p) {
   p.soft[id] = blurMask(grown, w, hh, 2);
   // Edge maps take a moment, so they follow once you pause; until then the edge is just soft.
   p.edge = p.edge || {}; delete p.edge[id];
-  clearTimeout(p.edgeT); p.edgeT = setTimeout(() => { if (p.masks?.[id]) { p.edge[id] = edgeMaps(p, grown); scheduleRender(); } }, 250);
+  p.edgeT = p.edgeT || {}; clearTimeout(p.edgeT[id]);
+  p.edgeT[id] = setTimeout(() => { if (p.masks?.[id]) { p.edge[id] = edgeMaps(p, grown); scheduleRender(); } }, 250);
   drawOverlay(); scheduleRender();
 }
 // Changing "How similar" right after a tap redoes that tap, so you can grow or shrink a selection live.
@@ -834,7 +853,8 @@ function paintTo(pt) {
       const c = labAt(p, Math.round(sx), Math.round(sy), 1);
       seed = stroke.seed = stroke.seed ? { L: stroke.seed.L * .7 + c.L * .3, A: stroke.seed.A * .7 + c.A * .3, B: stroke.seed.B * .7 + c.B * .3 } : c;
     }
-    stamp(p, mask, sx, sy, stroke.r, stroke.erase, seed, P.tol + 4);
+    const [inner, kept] = stamp(p, mask, sx, sy, stroke.r, stroke.erase, seed, P.tol + 4);
+    stroke.inner = (stroke.inner || 0) + inner; stroke.kept = (stroke.kept || 0) + kept;
   }
   stroke.last = pt;
   if (!stroke.raf) stroke.raf = requestAnimationFrame(() => { if (stroke) stroke.raf = 0; drawOverlay(); });
@@ -857,7 +877,7 @@ const dims = src => [src.naturalWidth || src.width, src.naturalHeight || src.hei
 function drawTo(src, rect, scale) {
   const w = Math.max(1, Math.round(rect.w * scale)), hh = Math.max(1, Math.round(rect.h * scale));
   const c = document.createElement("canvas"); c.width = w; c.height = hh;
-  const x = c.getContext("2d", { willReadFrequently: true }); x.imageSmoothingQuality = "high";
+  const x = ctx2d(c, { willReadFrequently: true }); x.imageSmoothingQuality = "high";
   x.drawImage(src, rect.x, rect.y, rect.w, rect.h, 0, 0, w, hh);
   return { canvas: c, ctx: x, data: x.getImageData(0, 0, w, hh) };
 }
@@ -866,15 +886,16 @@ async function buildBase(photo) {
   photo.base = drawTo(src, rect, Math.min(1, PREVIEW / L)).data;
   photo.thumb = drawTo(src, rect, Math.min(1, THUMB / L)).data;
   photo.mini = drawTo(src, rect, Math.min(1, MINI / L)).data;
-  photo.out = new ImageData(photo.base.width, photo.base.height);
-  photo.thumbOut = new ImageData(photo.thumb.width, photo.thumb.height);
+  photo.out = newImg(photo.base.width, photo.base.height);
+  photo.thumbOut = newImg(photo.thumb.width, photo.thumb.height);
   photo.nudge = photo.nudge || { exposure: 0, temp: 0 };
   photo.lab = null; photo.edge = {};
   if (!photo.sample && src.close) src.close();
 }
 async function rebuildAll() {
   resetView();
-  for (const p of state.photos) { p.picks = {}; p.masks = {}; p.soft = {}; p.neutral = p.pre ? null : p.neutral; await buildBase(p); }
+  for (const p of state.photos) { p.picks = {}; p.masks = {}; p.soft = {}; p.neutral = p.pre ? null : p.neutral; await buildBase(p); p.dirty = true; }
+  Session.saveSoon();
   renderAll();
 }
 
@@ -918,10 +939,10 @@ async function loadSamples() {
 }
 
 /* ---------- rendering ---------- */
-const mainC = $("#main"), mainX = mainC.getContext("2d");
+const mainC = $("#main"), mainX = ctx2d(mainC);
 let rafPending = false, thumbTimer = null, presetTimer = null;
 function scheduleRender() {
-  persist();
+  persist(); const cp = curPhoto(); if (cp) cp.dirty = true; Session.saveSoon();
   if (!rafPending) { rafPending = true; requestAnimationFrame(() => { rafPending = false; renderMain(); }); }
   clearTimeout(thumbTimer); thumbTimer = setTimeout(renderThumbs, 160);
 }
@@ -940,7 +961,7 @@ function renderThumbs() {
     if (!p.thumb) continue;
     const A = analyze(p);
     processImage(p.thumb, p.thumbOut, A.P, { ...A.opts, fx: true, grainScale: 1 });
-    for (const c of [p.stripC, p.feedC]) if (c) { c.width = p.thumb.width; c.height = p.thumb.height; c.getContext("2d").putImageData(p.thumbOut, 0, 0); }
+    for (const c of [p.stripC, p.feedC]) if (c) { c.width = p.thumb.width; c.height = p.thumb.height; ctx2d(c).putImageData(p.thumbOut, 0, 0); }
   }
 }
 function renderPresetThumbs() {
@@ -949,9 +970,9 @@ function renderPresetThumbs() {
   for (const pr of PRESETS) {
     const c = presetCanvases[pr.id]; if (!c || !c.isConnected) continue;
     const P = compile(effective({ preset: pr.id, strength: 100, adj: ZERO }));
-    const out = new ImageData(p.mini.width, p.mini.height);
+    const out = newImg(p.mini.width, p.mini.height);
     processImage(p.mini, out, P, { ...A.opts, fx: false });
-    c.width = out.width; c.height = out.height; c.getContext("2d").putImageData(out, 0, 0);
+    c.width = out.width; c.height = out.height; ctx2d(c).putImageData(out, 0, 0);
   }
 }
 function schedulePresetThumbs() { clearTimeout(presetTimer); presetTimer = setTimeout(renderPresetThumbs, 220); }
@@ -987,7 +1008,7 @@ function renderStrip() {
 }
 function select(i) { if (state.paint) endPaint(); state.cur = i; resetView(); setTapMode(null); renderStrip(); renderMain(); schedulePresetThumbs(); if (["light", "colors"].includes(state.tab)) renderPanel(); }
 function removePhoto(i) {
-  state.photos.splice(i, 1);
+  const [gone] = state.photos.splice(i, 1); Session.remove(gone);
   if (!state.photos.length) { loadSamples().then(renderAll); return; }
   state.cur = Math.min(state.cur, state.photos.length - 1); renderAll();
 }
@@ -1118,7 +1139,12 @@ function pointerEnd(e) {
     if (pd.kind === "tap" && state.tapMode) handleTap(pd.pt);
   }
   pending = null;
-  if (stroke) { stroke = null; const p = curPhoto(); if (p && state.paint) { finishOp(p); renderPanel(); } }
+  if (stroke) {
+    // Smart brush skipping most of what it touches usually means a busy texture: say how to get past it.
+    if (state.paint?.smart && stroke.inner > 400 && stroke.kept / stroke.inner < .25)
+      toast("The smart " + (stroke.erase ? "eraser" : "brush") + " is skipping most of this area. Raise “How similar”, or turn Smart off and zoom in.");
+    stroke = null; const p = curPhoto(); if (p && state.paint) { finishOp(p); renderPanel(); }
+  }
   pan = null;
   if (state.showOriginal) showOrig(false);
 }
@@ -1157,7 +1183,7 @@ function handleTap(pt) {
   }
   if (mode.kind === "eyedrop") {
     const t = state.recipe.palette.find(x => x.id === mode.id); if (!t) return;
-    const [r, g, b] = avgRGB(p.out, pt, 3); t.hex = toHex(r, g, b);
+    const [r, g, b] = avgRGB(p.out, pt, 3); rgb2lab(r, g, b); t.hex = labHex(LAB[0], LAB[1], LAB[2]);
     toast(t.name + " is now " + t.hex.toUpperCase());
   }
   scheduleRender(); schedulePresetThumbs(); renderPanel();
@@ -1419,13 +1445,13 @@ function renderPanelBody() {
 /* ---------- match ---------- */
 function thumbDataURL(imgData) {
   const c = document.createElement("canvas"), k = Math.min(1, 96 / Math.max(imgData.width, imgData.height));
-  const t = document.createElement("canvas"); t.width = imgData.width; t.height = imgData.height; t.getContext("2d").putImageData(imgData, 0, 0);
-  c.width = Math.round(imgData.width * k); c.height = Math.round(imgData.height * k); c.getContext("2d").drawImage(t, 0, 0, c.width, c.height);
+  const t = document.createElement("canvas"); t.width = imgData.width; t.height = imgData.height; ctx2d(t).putImageData(imgData, 0, 0);
+  c.width = Math.round(imgData.width * k); c.height = Math.round(imgData.height * k); ctx2d(c).drawImage(t, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", .8);
 }
 function matchCurrent() {
   const p = curPhoto(); if (!p) return;
-  const A = analyze(p), tmp = new ImageData(p.thumb.width, p.thumb.height);
+  const A = analyze(p), tmp = newImg(p.thumb.width, p.thumb.height);
   processImage(p.thumb, tmp, A.P, { ...A.opts, match: null, fx: false });
   state.recipe.match = { ref: imageStats(tmp), strength: state.recipe.match?.strength ?? 50, light: true, color: true, thumb: thumbDataURL(tmp), from: p.name + ", as edited" };
   scheduleRender(); schedulePresetThumbs(); renderPanel(); toast("Matching every photo to " + p.name);
@@ -1435,11 +1461,11 @@ function evenOut() {
   const all = state.photos.filter(p => p.thumb); if (!all.length) return;
   const keys = ["mY", "mB", "mR", "sY", "sB", "sR"], ref = Object.fromEntries(keys.map(k => [k, 0]));
   for (const p of all) {
-    const A = analyze(p), tmp = new ImageData(p.thumb.width, p.thumb.height);
+    const A = analyze(p), tmp = newImg(p.thumb.width, p.thumb.height);
     processImage(p.thumb, tmp, A.P, { ...A.opts, match: null, palette: null, paints: null, fx: false });
     const st = imageStats(tmp); for (const k of keys) ref[k] += st[k] / all.length;
   }
-  const c = curPhoto(), A = analyze(c), tmp = new ImageData(c.thumb.width, c.thumb.height);
+  const c = curPhoto(), A = analyze(c), tmp = newImg(c.thumb.width, c.thumb.height);
   processImage(c.thumb, tmp, A.P, { ...A.opts, match: null, fx: false });
   state.recipe.match = { ref, strength: state.recipe.match?.strength ?? 50, light: true, color: true, thumb: thumbDataURL(tmp), from: "The average of your " + all.length + " photos" };
   scheduleRender(); schedulePresetThumbs(); renderPanel(); toast("Evening out the feel of all " + all.length + " photos");
@@ -1487,9 +1513,9 @@ function renderTransitionPreviews(strip) {
   for (let s = 0; s <= transition.steps; s++) {
     const c = strip.children[s]?.querySelector("canvas"); if (!c) continue;
     withRecipe(tRecipe(s), () => {
-      const A = analyze(p), out = new ImageData(p.mini.width, p.mini.height);
+      const A = analyze(p), out = newImg(p.mini.width, p.mini.height);
       processImage(p.mini, out, A.P, { ...A.opts, fx: false });
-      c.width = out.width; c.height = out.height; c.getContext("2d").putImageData(out, 0, 0);
+      c.width = out.width; c.height = out.height; ctx2d(c).putImageData(out, 0, 0);
     });
   }
   analyze(p);
@@ -1581,15 +1607,30 @@ function applyRecipe(rc) {
 }
 
 /* ---------- export ---------- */
-async function renderExport(photo) {
+// Full size is rendered and encoded in strips, so even a 48 MP photo never needs one giant canvas.
+const MAX_EXPORT = 50e6;
+async function renderExport(photo, onProgress) {
   const src = await decode(photo), [W, H] = dims(src), rect = cropRect(W, H, state.crop);
-  const scale = state.size === "ig" ? Math.min(1, 1080 / rect.w) : Math.min(1, Math.sqrt(16e6 / (rect.w * rect.h)));
-  const d = drawTo(src, rect, scale);
-  if (!photo.sample && src.close) src.close();
-  const A = analyze(photo);
-  processImage(d.data, d.data, A.P, { ...A.opts, fx: true, grainScale: Math.max(1, Math.max(d.data.width, d.data.height) / 1100) });
-  d.ctx.putImageData(d.data, 0, 0);
-  return await new Promise(res => d.canvas.toBlob(res, "image/jpeg", .95));
+  const scale = state.size === "ig" ? Math.min(1, 1080 / rect.w) : Math.min(1, Math.sqrt(MAX_EXPORT / (rect.w * rect.h)));
+  const w = Math.max(1, Math.round(rect.w * scale)), hh = Math.max(1, Math.round(rect.h * scale));
+  const A = analyze(photo), opts = { ...A.opts, fx: true, grainScale: Math.max(1, Math.max(w, hh) / 1100), fullH: hh };
+  const enc = new JpegStream(w, hh, 95, P3 ? p3Profile() : null);
+  const STRIP = Math.max(8, Math.min(512, Math.floor(2e6 / w / 8) * 8));
+  const c = document.createElement("canvas"); c.width = w; c.height = STRIP;
+  const x = ctx2d(c, { willReadFrequently: true }); x.imageSmoothingQuality = "high";
+  try {
+    for (let y0 = 0; y0 < hh; y0 += STRIP) {
+      const sh = Math.min(STRIP, hh - y0);
+      x.clearRect(0, 0, w, STRIP);
+      x.drawImage(src, rect.x, rect.y + y0 / scale, rect.w, sh / scale, 0, 0, w, sh);
+      const d = x.getImageData(0, 0, w, sh);
+      processImage(d, d, A.P, { ...opts, oy: y0 });
+      enc.add(d.data, sh);
+      onProgress?.(Math.min(1, (y0 + sh) / hh));
+      await new Promise(r => setTimeout(r));   // keep the page responsive and the progress text moving
+    }
+  } finally { if (!photo.sample && src.close) src.close(); }
+  return enc.finish();
 }
 const outName = p => "safelight-" + p.name.replace(/\.[^.]+$/, "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() + ".jpg";
 const canShareFiles = files => { try { return !!(navigator.canShare && navigator.canShare({ files })); } catch (e) { return false; } };
@@ -1617,9 +1658,11 @@ function openSaveSheet() {
     go.querySelectorAll("button").forEach(b => b.disabled = true);
     const files = [], used = new Set();
     for (let i = 0; i < list.length; i++) {
-      status.textContent = list.length > 1 ? `Rendering ${i + 1} of ${list.length}…` : "Rendering…";
+      const label = list.length > 1 ? `Rendering ${i + 1} of ${list.length}` : "Rendering";
+      status.textContent = label + "…";
       let nm = outName(list[i]); while (used.has(nm)) nm = nm.replace(/\.jpg$/, "-" + i + ".jpg"); used.add(nm);
-      files.push(new File([await renderExport(list[i])], nm, { type: "image/jpeg" }));
+      try { files.push(new File([await renderExport(list[i], f => { status.textContent = `${label}… ${Math.round(f * 100)}%`; })], nm, { type: "image/jpeg" })); }
+      catch (e) { status.textContent = "Couldn't render " + list[i].name + ". Try Instagram size."; go.querySelectorAll("button").forEach(b => b.disabled = false); return; }
     }
     ready = files; status.textContent = ""; paintGo();
   };
@@ -1685,21 +1728,78 @@ $("#fileIn").addEventListener("change", async e => {
   toast(`Opening ${files.length} photo${files.length > 1 ? "s" : ""}…`);
   for (const f of files) {
     const p = { id: uid(), name: f.name, file: f };
-    try { await buildBase(p); state.photos.push(p); state.cur = state.photos.length - 1; renderStrip(); renderMain(); }
+    try { await buildBase(p); state.photos.push(p); p.dirty = true; Session.saveFile(p); state.cur = state.photos.length - 1; renderStrip(); renderMain(); }
     catch (err) { failed++; }
   }
   if (!state.photos.length) await loadSamples();
   state.cur = Math.min(start, state.photos.length - 1);
   renderAll();
+  Session.saveSoon();
   if (failed) toast(`${failed} file${failed > 1 ? "s" : ""} couldn't be opened. Try JPEG, PNG or HEIC.`);
 });
+
+/* ---------- your photos and painted areas, kept between visits (IndexedDB, on this device only) ---------- */
+const Session = {
+  db: null, timer: 0,
+  open() {
+    if (this.db) return this.db;
+    return this.db = new Promise((res, rej) => {
+      const r = indexedDB.open("safelight", 1);
+      r.onupgradeneeded = () => { r.result.createObjectStore("files"); r.result.createObjectStore("photos"); };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+  },
+  async run(stores, fn) {
+    const db = await this.open();
+    return new Promise((res, rej) => { const t = db.transaction(stores, "readwrite"); const out = fn(t); t.oncomplete = () => res(out); t.onerror = t.onabort = () => rej(t.error); });
+  },
+  async get(store, key) {
+    const db = await this.open();
+    return new Promise((res, rej) => { const r = db.transaction(store).objectStore(store).get(key); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  },
+  order() { LS.set("safelight:photos", state.photos.filter(p => !p.isSample).map(p => p.id)); },
+  saveFile(p) { this.run(["files"], t => t.objectStore("files").put(p.file, p.id)).catch(() => {}); },
+  remove(p) { if (p && !p.isSample) this.run(["files", "photos"], t => { t.objectStore("files").delete(p.id); t.objectStore("photos").delete(p.id); }).catch(() => {}); this.order(); },
+  saveSoon() { clearTimeout(this.timer); this.timer = setTimeout(() => this.save(), 700); },
+  async save() {
+    this.order();
+    const dirty = state.photos.filter(p => p.dirty && !p.isSample && p.base); if (!dirty.length) return;
+    dirty.forEach(p => p.dirty = false);
+    try {
+      await this.run(["photos"], t => { for (const p of dirty) t.objectStore("photos").put({
+        name: p.name, crop: state.crop, w: p.base.width, h: p.base.height, masks: p.masks || {}, picks: p.picks || {},
+        pre: p.pre || null, neutral: p.neutral || null, nudge: p.nudge }, p.id); });
+    } catch (e) { dirty.forEach(p => p.dirty = true); }
+  },
+  async load() {
+    const ids = LS.get("safelight:photos", []), out = [];
+    for (const id of ids) {
+      try {
+        const file = await this.get("files", id); if (!file) continue;
+        const rec = await this.get("photos", id) || {}, p = { id, name: rec.name || file.name || "Photo", file };
+        await buildBase(p);
+        p.picks = rec.picks || {}; p.pre = rec.pre; p.neutral = rec.neutral; p.nudge = rec.nudge || p.nudge;
+        // painted areas only fit the crop they were made in
+        if (rec.crop === state.crop && rec.w === p.base.width && rec.h === p.base.height && rec.masks) {
+          p.masks = rec.masks; p.soft = {};
+          for (const cid in p.masks) finishOp(p, cid);
+        }
+        p.dirty = false; out.push(p);
+      } catch (e) {}
+    }
+    return out;
+  },
+};
 
 /* ---------- boot ---------- */
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("/sw.js").catch(() => {});
 (async function boot() {
   try { navigator.storage?.persist?.(); } catch (e) {}   // ask Safari not to clear your palette and recipes
   renderTabs();
-  await loadSamples();
+  let restored = [];
+  try { restored = await Session.load(); } catch (e) {}
+  if (restored.length) { state.photos = restored; toast(`Welcome back: ${restored.length} photo${restored.length > 1 ? "s" : ""} restored`); }
+  else await loadSamples();
   renderAll();
   state.recipes = await Store.list();
   if (state.tab === "recipes") renderPanel();
