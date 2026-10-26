@@ -61,8 +61,12 @@ header{display:flex;align-items:center;gap:8px}
 .btn:disabled{opacity:.45;cursor:default}
 .btn.small{padding:6px 10px;font-size:13px}
 
-.stage{position:relative;min-height:0;border-radius:12px;background:#0c0c0c;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
-.stage canvas.main{position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;width:auto;height:auto}
+.stage{position:relative;min-height:0;border-radius:12px;background:#0c0c0c;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.stage canvas.main{position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;width:auto;height:auto;transform-origin:50% 50%}
+.fit{position:absolute;right:10px;top:10px;z-index:2;border:0;background:rgba(0,0,0,.65);color:#fff;padding:6px 12px;border-radius:999px;font-weight:600;font-size:13px}
+.ring{position:absolute;border:1.5px solid #fff;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.55);pointer-events:none;z-index:2}
+button,label,input,select,.chip{touch-action:manipulation}
+@media (pointer:coarse){input.field,select.field{font-size:16px}}
 .badge{position:absolute;left:10px;top:10px;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;background:rgba(0,0,0,.6);color:#fff;padding:4px 8px;border-radius:6px}
 .hint{position:absolute;right:10px;bottom:10px;font-size:12px;color:#cfcfcf;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:6px}
 .feed{position:absolute;inset:0;overflow:auto;padding:10px;background:var(--bg);touch-action:pan-y}
@@ -189,7 +193,9 @@ select.field{appearance:auto}
     <canvas class="main" id="main" width="1080" height="1350" aria-label="Photo preview"></canvas>
     <canvas class="main ov" id="ov" width="1080" height="1350" hidden></canvas>
     <span class="badge" id="badge" hidden>Original</span>
-    <span class="hint" id="hint">Hold to see original</span>
+    <span class="hint" id="hint">Hold to see original · pinch to zoom</span>
+    <button class="fit" id="fit" hidden>Fit</button>
+    <div class="ring" id="ring" hidden></div>
     <div class="markers" id="markers"></div>
     <div class="tapbar" id="tapbar" hidden><span id="tapText"></span><button id="tapCancel">Cancel</button></div>
     <div class="feed" id="feed" hidden>
@@ -301,7 +307,7 @@ const PRESETS = [
 ];
 const presetById = id => PRESETS.find(p => p.id === id) || PRESETS[0];
 const MARKERS = ["#ff00ff", "#00ff00", "#ff6a00"];
-const newColor = (name, hex, marker) => ({ id: uid(), name, hex, on: true, range: 25, strength: 100, light: 60, auto: false, markerOn: false, marker: marker || "#ff00ff" });
+const newColor = (name, hex, marker) => ({ id: uid(), name, hex, on: true, range: 25, strength: 100, light: 100, auto: false, markerOn: false, marker: marker || "#ff00ff", v: 2 });
 const DEFAULT_PALETTE = () => [newColor("Periwinkle blue", "#7193d2", MARKERS[0]), newColor("Olive green", "#56623a", MARKERS[1]), newColor("Earth brown", "#6b4f37", MARKERS[2])];
 // Marker colors painted in Procreate/Photoshop: match by hue, ignore dull pixels.
 function keyWeight(a, b, K) {
@@ -457,11 +463,23 @@ function processImage(src, dst, P, opt) {
             if (x0 > t.mw - 2) x0 = t.mw - 2; if (y0 > t.mh - 2) y0 = t.mh - 2; if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
             const ax = clamp01(fx - x0), ay = clamp01(fy - y0), m = t.m, j = y0 * t.mw + x0;
             v = ((m[j] * (1 - ax) + m[j + 1] * ax) * (1 - ay) + (m[j + t.mw] * (1 - ax) + m[j + t.mw + 1] * ax) * ay) / 255;
+            if (t.E && v > .01 && v < .99) {
+              // Edge snap: in the soft band, decide by this pixel's own color (object vs. background), so edges stay crisp at full size.
+              const e = (Math.round(fy) * t.mw + Math.round(fx)) * 3, F = t.E.F, Bk = t.E.B;
+              const d0 = F[e] - Bk[e], d1 = F[e + 1] - Bk[e + 1], d2 = F[e + 2] - Bk[e + 2], dd = d0 * d0 + d1 * d1 + d2 * d2;
+              if (dd > 300) {
+                const a = clamp01(((s[i] - Bk[e]) * d0 + (s[i + 1] - Bk[e + 1]) * d1 + (s[i + 2] - Bk[e + 2]) * d2) / dd);
+                v += (a - v) * ss(300, 2500, dd);
+              }
+            }
           }
           if (v <= .003) continue;
           r = clamp01(r); g = clamp01(g); b = clamp01(b);
           rgb2lab(r, g, b);
-          const Lp = LAB[0] + t.dL, cs = ss(.06, .24, Lp) * (1 - ss(.9, 1, Lp));
+          // Recolor like real paint: the object's mean lands on your exact shade, its own light and shadow ride on top,
+          // and color fades with shadow (darker = less chroma) and toward white in specular highlights.
+          const L0 = LAB[0], Lp = L0 + (t.TL + (L0 - t.Lm) * t.g - L0) * t.kl;
+          const cs = Math.max(0, Math.min(1.5, Lp / t.TL)) * (1 - ss(.9, 1.02, Lp));
           lab2rgb(Lp, t.A * cs, t.B * cs);
           const k = v * t.k;
           r += (RGB[0] - r) * k; g += (RGB[1] - g) * k; b += (RGB[2] - b) * k;
@@ -495,10 +513,11 @@ function imageStats(img) {
 function buildXform(src, m) {
   const ref = m.ref, k = m.strength / 100, cl = (v, a, b) => Math.max(a, Math.min(b, v));
   let aY = 1, bY = 0, aCb = 1, bCb = 0, aCr = 1, bCr = 0;
-  if (m.light) { aY = src.sY > .01 ? cl(ref.sY / src.sY, .6, 1.6) : 1; bY = ref.mY - src.mY * aY; }
+  // Kept gentle on purpose: a feel match nudges brightness, contrast and cast, it never repaints the photo.
+  if (m.light) { aY = src.sY > .01 ? cl(ref.sY / src.sY, .8, 1.25) : 1; bY = cl(ref.mY - src.mY * aY, -.12, .12); }
   if (m.color) {
-    aCb = src.sB > .006 ? cl(ref.sB / src.sB, .5, 2) : 1; bCb = ref.mB - src.mB * aCb;
-    aCr = src.sR > .006 ? cl(ref.sR / src.sR, .5, 2) : 1; bCr = ref.mR - src.mR * aCr;
+    aCb = src.sB > .006 ? cl(ref.sB / src.sB, .75, 1.33) : 1; bCb = cl(ref.mB - src.mB * aCb, -.04, .04);
+    aCr = src.sR > .006 ? cl(ref.sR / src.sR, .75, 1.33) : 1; bCr = cl(ref.mR - src.mR * aCr, -.04, .04);
   }
   return { aY: 1 + k * (aY - 1), bY: k * bY, aCb: 1 + k * (aCb - 1), bCb: k * bCb, aCr: 1 + k * (aCr - 1), bCr: k * bCr };
 }
@@ -570,14 +589,17 @@ function paletteFor(photo, found) {
 /* ---------- state ---------- */
 const saved = LS.get("safelight:last", null);
 const state = {
-  photos: [], cur: 0, view: "edit", tab: "looks", tapMode: null,
+  photos: [], cur: 0, view: "edit", tab: "colors", tapMode: null,
   recipe: saved?.recipe ? { ...saved.recipe, adj: { ...ZERO, ...saved.recipe.adj } } : { preset: "none", strength: 100, adj: { ...ZERO }, match: null },
-  crop: saved?.crop || "original", size: "ig", recipes: [], showOriginal: false,
+  crop: saved?.crop || "original", size: "full", recipes: [], showOriginal: false,
 };
 if (!Array.isArray(state.recipe.palette) || (state.recipe.palette.length === 3 && state.recipe.palette.every((t, i) => t.hex === OLD_DEFAULTS[i])))
   state.recipe.palette = DEFAULT_PALETTE();
 function upgradePalette(pal) {
-  (pal || []).forEach((t, i) => { if (t.auto === undefined) t.auto = false; if (t.markerOn === undefined) t.markerOn = false; if (!t.marker) t.marker = MARKERS[i % 3]; });
+  (pal || []).forEach((t, i) => {
+    if (t.auto === undefined) t.auto = false; if (t.markerOn === undefined) t.markerOn = false; if (!t.marker) t.marker = MARKERS[i % 3];
+    if (t.v !== 2) { if (t.light === 60) t.light = 100; t.v = 2; }   // the old 60% default left painted objects lighter than your shade
+  });
 }
 upgradePalette(state.recipe.palette);
 function persist() { LS.set("safelight:last", { recipe: state.recipe, crop: state.crop }); }
@@ -614,7 +636,7 @@ function paintsFor(photo, painted, img) {
           const i = (y * w + x) * 4; rgb2lab(s[i] / 255, s[i + 1] / 255, s[i + 2] / 255); sL += LAB[0]; c++;
         }
       }
-      if (c) out.push({ m: mk, mw, mh, A: T.A, B: T.B, dL: (T.L - sL / c) * t.light / 100, k: t.strength / 100 });
+      if (c) out.push({ m: mk, mw, mh, E: photo.edge?.[t.id] || null, ...shadeParams(T, sL / c, t.light), k: t.strength / 100 });
     }
     if (t.markerOn && t.marker) {
       const K = hexLab(t.marker);
@@ -625,13 +647,68 @@ function paintsFor(photo, painted, img) {
         rgb2lab(s[p] / 255, s[p + 1] / 255, s[p + 2] / 255); sL += LAB[0]; c++;
       }
       photo.markerFound[t.id] = c;
-      if (c >= 3) out.push({ key: K, A: T.A, B: T.B, dL: (T.L - sL / c) * t.light / 100, k: 1 }); // a marker is never a real color: always convert it fully
+      if (c >= 3) out.push({ key: K, ...shadeParams(T, sL / c, t.light), k: 1 }); // a marker is never a real color: always convert it fully
     }
   }
   return out.length ? out : null;
 }
 
+// light = 100: the object's average becomes exactly your shade. Shading contrast scales gently with the change in brightness.
+const shadeParams = (T, Lm, light) => ({ A: T.A, B: T.B, TL: Math.max(.02, T.L), Lm, g: Math.max(.6, Math.min(1.6, Math.sqrt(T.L / Math.max(.02, Lm)))), kl: light / 100 });
+
 /* ---------- painting objects your color ---------- */
+// OKLab of the preview, computed once per photo: selection and the smart brush compare colors constantly.
+function labOf(p) {
+  if (p.lab) return p.lab;
+  const s = p.base.data, n = s.length / 4, out = new Float32Array(n * 3);
+  for (let j = 0; j < n; j++) { const i = j * 4; rgb2lab(s[i] / 255, s[i + 1] / 255, s[i + 2] / 255); out[j * 3] = LAB[0]; out[j * 3 + 1] = LAB[1]; out[j * 3 + 2] = LAB[2]; }
+  return p.lab = out;
+}
+// How different a pixel is from the seed color, ignoring shading: a shadowed part of an object has the same color, just darker,
+// and in OKLab that scales a and b along with L. So compare against the seed's color scaled to this pixel's lightness.
+function shadeDist2(lab, k, seed) {
+  const L = lab[k], f = Math.max(.35, Math.min(2.5, L / Math.max(.05, seed.L)));
+  const da = lab[k + 1] - seed.A * f, db = lab[k + 2] - seed.B * f, dl = (L - seed.L) * .25;
+  return da * da + db * db + dl * dl;
+}
+function labAt(p, cx, cy, rad) {
+  const lab = labOf(p), w = p.base.width, hh = p.base.height; let L = 0, A = 0, B = 0, c = 0;
+  for (let y = Math.max(0, cy - rad); y <= Math.min(hh - 1, cy + rad); y++) for (let x = Math.max(0, cx - rad); x <= Math.min(w - 1, cx + rad); x++) {
+    const j = (y * w + x) * 3; L += lab[j]; A += lab[j + 1]; B += lab[j + 2]; c++;
+  }
+  return { L: L / c, A: A / c, B: B / c };
+}
+function boxBlurF(src, w, hh, r) {
+  const tmp = new Float32Array(w * hh), out = new Float32Array(w * hh), n = 2 * r + 1;
+  for (let y = 0; y < hh; y++) {
+    const row = y * w; let acc = 0;
+    for (let x = -r; x <= r; x++) acc += src[row + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) { tmp[row + x] = acc / n; acc += src[row + Math.min(w - 1, x + r + 1)] - src[row + Math.max(0, x - r)]; }
+  }
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += tmp[Math.min(hh - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < hh; y++) { out[y * w + x] = acc / n; acc += tmp[Math.min(hh - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]; }
+  }
+  return out;
+}
+// Local object and background colors along the mask edge, used to snap the edge to the real boundary at any export size.
+function edgeMaps(p, hard) {
+  const w = p.base.width, hh = p.base.height, n = w * hh, s = p.base.data, R = 6;
+  const wf = new Float32Array(n), wb = new Float32Array(n);
+  for (let j = 0; j < n; j++) { wf[j] = hard[j] >= 230 ? 1 : 0; wb[j] = hard[j] <= 25 ? 1 : 0; }
+  const F = new Uint8ClampedArray(n * 3), B = new Uint8ClampedArray(n * 3), bf = boxBlurF(wf, w, hh, R), bb = boxBlurF(wb, w, hh, R), ch = new Float32Array(n);
+  for (let c = 0; c < 3; c++) {
+    for (let j = 0; j < n; j++) ch[j] = s[j * 4 + c] * wf[j];
+    const cf = boxBlurF(ch, w, hh, R);
+    for (let j = 0; j < n; j++) ch[j] = s[j * 4 + c] * wb[j];
+    const cb = boxBlurF(ch, w, hh, R);
+    for (let j = 0; j < n; j++) { F[j * 3 + c] = bf[j] > .02 ? cf[j] / bf[j] : 0; B[j * 3 + c] = bb[j] > .02 ? cb[j] / bb[j] : 0; }
+  }
+  // Where one side is missing, there is no edge to snap to: make both sides equal so snapping switches off there.
+  for (let j = 0; j < n; j++) if (bf[j] <= .02 || bb[j] <= .02) { const k = j * 3; F[k] = B[k]; F[k + 1] = B[k + 1]; F[k + 2] = B[k + 2]; }
+  return { F, B };
+}
 function blurMask(m, w, hh, r) {
   const tmp = new Float32Array(w * hh), out = new Uint8Array(w * hh), n = 2 * r + 1;
   for (let y = 0; y < hh; y++) {
@@ -653,16 +730,14 @@ function blurMask(m, w, hh, r) {
   return out;
 }
 function smartSelect(p, pt, tol, mask) {
-  const img = p.base, s = img.data, w = img.width, hh = img.height;
-  const sx = Math.round(pt.x * (w - 1)), sy = Math.round(pt.y * (hh - 1)), seed = avgLab(img, pt, 2), T2 = (tol / 100) ** 2;
+  const img = p.base, lab = labOf(p), w = img.width, hh = img.height;
+  const sx = Math.round(pt.x * (w - 1)), sy = Math.round(pt.y * (hh - 1)), seed = labAt(p, sx, sy, 2), T2 = (tol / 100) ** 2;
   const seen = new Uint8Array(w * hh), q = new Int32Array(w * hh);
   let head = 0, tail = 0, added = 0;
   q[tail++] = sy * w + sx; seen[sy * w + sx] = 1;
   while (head < tail) {
-    const idx = q[head++], i = idx * 4;
-    rgb2lab(s[i] / 255, s[i + 1] / 255, s[i + 2] / 255);
-    const dl = (LAB[0] - seed.L) * .5, da = LAB[1] - seed.A, db = LAB[2] - seed.B;
-    if (dl * dl + da * da + db * db > T2 && head > 1) continue;
+    const idx = q[head++];
+    if (shadeDist2(lab, idx * 3, seed) > T2 && head > 1) continue;
     if (mask[idx] < 255) { mask[idx] = 255; added++; }
     const x = idx % w;
     if (x > 0 && !seen[idx - 1]) { seen[idx - 1] = 1; q[tail++] = idx - 1; }
@@ -672,12 +747,17 @@ function smartSelect(p, pt, tol, mask) {
   }
   return added;
 }
-function stamp(p, mask, cx, cy, r, erase) {
-  const w = p.base.width, hh = p.base.height;
+// seed set = smart brush: only paints (or erases) pixels that look like the color under the brush center, so it hugs edges.
+function stamp(p, mask, cx, cy, r, erase, seed, tol) {
+  const w = p.base.width, hh = p.base.height, lab = seed ? labOf(p) : null, T = (tol || 10) / 100;
   const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r)), y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(hh - 1, Math.ceil(cy + r));
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
     const d = Math.hypot(x - cx, y - cy) / r; if (d >= 1) continue;
-    const v = 255 * (1 - ss(.6, 1, d)), j = y * w + x;
+    let v = 255 * (1 - ss(.6, 1, d)); const j = y * w + x;
+    if (seed) {
+      v *= 1 - ss(T * .8, T * 1.4, Math.sqrt(shadeDist2(lab, j * 3, seed)));
+      if (v < 1) continue;
+    }
     mask[j] = erase ? Math.min(mask[j], 255 - v) : Math.max(mask[j], v);
   }
 }
@@ -710,14 +790,14 @@ function startPaint(id) {
   setTapMode(null); if (state.view !== "edit") setView("edit");
   p.masks = p.masks || {}; p.soft = p.soft || {};
   if (!p.masks[id]) p.masks[id] = new Uint8Array(p.base.width * p.base.height);
-  state.paint = { id, tool: "select", size: 22, tol: 10, show: true, undo: [] };
+  state.paint = { id, tool: "select", size: 22, tol: 10, show: true, smart: true, undo: [], lastSel: null };
   stage.classList.add("painting"); $("#hint").hidden = true;
   renderPanel(); drawOverlay();
 }
 function endPaint() {
   const P = state.paint; if (!P) return;
-  const p = curPhoto(); state.paint = null; stroke = null;
-  if (p?.masks?.[P.id] && !p.masks[P.id].some(v => v > 8)) { delete p.masks[P.id]; delete p.soft[P.id]; }
+  const p = curPhoto(); state.paint = null; stroke = null; $("#ring").hidden = true;
+  if (p?.masks?.[P.id] && !p.masks[P.id].some(v => v > 8)) { delete p.masks[P.id]; delete p.soft[P.id]; delete p.edge?.[P.id]; }
   stage.classList.remove("painting"); $("#ov").hidden = true; $("#hint").hidden = state.view === "feed";
   scheduleRender(); schedulePresetThumbs(); renderPanel();
 }
@@ -730,7 +810,16 @@ function finishOp(p) {
     grown[j] = v;
   }
   p.soft[id] = blurMask(grown, w, hh, 2);
+  // Edge maps take a moment, so they follow once you pause; until then the edge is just soft.
+  p.edge = p.edge || {}; delete p.edge[id];
+  clearTimeout(p.edgeT); p.edgeT = setTimeout(() => { if (p.masks?.[id]) { p.edge[id] = edgeMaps(p, grown); scheduleRender(); } }, 250);
   drawOverlay(); scheduleRender();
+}
+// Changing "How similar" right after a tap redoes that tap, so you can grow or shrink a selection live.
+function reselect() {
+  const p = curPhoto(), P = state.paint; if (!p || !P?.lastSel) return;
+  const mask = p.masks[P.id]; mask.set(P.lastSel.before); smartSelect(p, P.lastSel.pt, P.tol, mask);
+  if (!P.reRaf) P.reRaf = requestAnimationFrame(() => { P.reRaf = 0; if (state.paint === P) finishOp(p); });
 }
 let stroke = null;
 function paintTo(pt) {
@@ -738,7 +827,15 @@ function paintTo(pt) {
   const w = p.base.width, hh = p.base.height, a = stroke.last, mask = p.masks[P.id];
   const ax = a.x * (w - 1), ay = a.y * (hh - 1), bx = pt.x * (w - 1), by = pt.y * (hh - 1);
   const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (stroke.r / 3)));
-  for (let k = 1; k <= steps; k++) stamp(p, mask, ax + (bx - ax) * k / steps, ay + (by - ay) * k / steps, stroke.r, stroke.erase);
+  for (let k = 1; k <= steps; k++) {
+    const sx = ax + (bx - ax) * k / steps, sy = ay + (by - ay) * k / steps;
+    let seed = null;
+    if (P.smart) {   // follow the object's shading as you drag, without jumping to whatever the center crosses
+      const c = labAt(p, Math.round(sx), Math.round(sy), 1);
+      seed = stroke.seed = stroke.seed ? { L: stroke.seed.L * .7 + c.L * .3, A: stroke.seed.A * .7 + c.A * .3, B: stroke.seed.B * .7 + c.B * .3 } : c;
+    }
+    stamp(p, mask, sx, sy, stroke.r, stroke.erase, seed, P.tol + 4);
+  }
   stroke.last = pt;
   if (!stroke.raf) stroke.raf = requestAnimationFrame(() => { if (stroke) stroke.raf = 0; drawOverlay(); });
 }
@@ -772,9 +869,11 @@ async function buildBase(photo) {
   photo.out = new ImageData(photo.base.width, photo.base.height);
   photo.thumbOut = new ImageData(photo.thumb.width, photo.thumb.height);
   photo.nudge = photo.nudge || { exposure: 0, temp: 0 };
+  photo.lab = null; photo.edge = {};
   if (!photo.sample && src.close) src.close();
 }
 async function rebuildAll() {
+  resetView();
   for (const p of state.photos) { p.picks = {}; p.masks = {}; p.soft = {}; p.neutral = p.pre ? null : p.neutral; await buildBase(p); }
   renderAll();
 }
@@ -886,7 +985,7 @@ function renderStrip() {
   strip.append(h("label", { class: "thumb add", for: "fileIn", "aria-label": "Add photos", text: "+" }));
   renderThumbs();
 }
-function select(i) { if (state.paint) endPaint(); state.cur = i; setTapMode(null); renderStrip(); renderMain(); schedulePresetThumbs(); if (["light", "colors"].includes(state.tab)) renderPanel(); }
+function select(i) { if (state.paint) endPaint(); state.cur = i; resetView(); setTapMode(null); renderStrip(); renderMain(); schedulePresetThumbs(); if (["light", "colors"].includes(state.tab)) renderPanel(); }
 function removePhoto(i) {
   state.photos.splice(i, 1);
   if (!state.photos.length) { loadSamples().then(renderAll); return; }
@@ -915,39 +1014,129 @@ function canvasPoint(e) {
   const r = mainC.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
   return x < 0 || y < 0 || x > 1 || y > 1 ? null : { x, y };
 }
+// Pinch (or ctrl/⌘-scroll, or a trackpad pinch) zooms the photo so edges can be painted precisely on a phone.
+const view = { z: 1, tx: 0, ty: 0 };
+function applyView() {
+  const t = view.z > 1.001 ? `translate(${view.tx}px,${view.ty}px) scale(${view.z})` : "";
+  mainC.style.transform = t; $("#ov").style.transform = t; $("#fit").hidden = !t; updateMarkers();
+}
+function resetView() { view.z = 1; view.tx = 0; view.ty = 0; applyView(); }
+function zoomTo(z, mx, my, u) {
+  // keep the photo point u (offset from the canvas center, in unscaled px) under the screen point (mx, my)
+  const r = mainC.getBoundingClientRect(), cx = r.left + r.width / 2 - view.tx, cy = r.top + r.height / 2 - view.ty;
+  view.z = Math.max(1, Math.min(8, z)); view.tx = mx - cx - view.z * u.x; view.ty = my - cy - view.z * u.y;
+  clampView();
+}
+function clampView() {
+  const mxT = (view.z - 1) * mainC.offsetWidth / 2, myT = (view.z - 1) * mainC.offsetHeight / 2;
+  view.tx = Math.max(-mxT, Math.min(mxT, view.tx)); view.ty = Math.max(-myT, Math.min(myT, view.ty));
+  applyView();
+}
+function photoOffset(mx, my) {
+  const r = mainC.getBoundingClientRect();
+  return { x: (mx - (r.left + r.width / 2)) / view.z, y: (my - (r.top + r.height / 2)) / view.z };
+}
+$("#fit").onclick = e => { e.stopPropagation(); resetView(); };
+$("#fit").addEventListener("pointerdown", e => e.stopPropagation());
+
+const ptrs = new Map();
+let pinch = null, pending = null, pan = null, locked = false;
+function ringAt(e) {
+  const ring = $("#ring"), P = state.paint;
+  if (!P || P.tool === "select" || state.view !== "edit") { ring.hidden = true; return; }
+  const sr = stage.getBoundingClientRect(), d = P.size * 2;
+  ring.style.width = ring.style.height = d + "px";
+  ring.style.left = (e.clientX - sr.left - d / 2) + "px"; ring.style.top = (e.clientY - sr.top - d / 2) + "px"; ring.hidden = false;
+}
+function cancelSingle() {
+  const p = curPhoto();
+  if (stroke && p && state.paint) { p.masks[state.paint.id].set(stroke.snap); state.paint.undo.pop(); stroke = null; finishOp(p); }
+  stroke = null; pending = null; pan = null;
+  if (state.showOriginal) showOrig(false);
+}
+function startPinch() {
+  const [a, b] = [...ptrs.values()], mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, z0: view.z, u: photoOffset(mx, my) };
+}
 stage.addEventListener("pointerdown", e => {
+  if (state.view !== "edit" || e.target.closest(".tapbar")) return;
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+  if (ptrs.size === 2) { cancelSingle(); startPinch(); locked = true; return; }
+  if (ptrs.size > 2 || locked) return;
+  e.preventDefault();
+  const pt = canvasPoint(e), p = curPhoto();
   if (state.paint) {
-    const pt = canvasPoint(e), p = curPhoto(), P = state.paint; if (!pt || !p) return;
-    e.preventDefault();
-    const mask = p.masks[P.id]; P.undo.push(mask.slice()); if (P.undo.length > 12) P.undo.shift();
-    if (P.tool === "select") {
-      const added = smartSelect(p, pt, P.tol, mask);
-      finishOp(p);
-      if (added < 30) toast("Only a tiny area was picked. Raise “How similar” or use Brush.");
-    } else {
-      try { stage.setPointerCapture(e.pointerId); } catch (err) {}
-      const rect = mainC.getBoundingClientRect();
-      stroke = { last: pt, r: Math.max(2, P.size * p.base.width / rect.width), erase: P.tool === "erase", raf: 0 };
-      paintTo(pt);
-    }
+    ringAt(e);
+    if (!pt || !p) return;
+    const P = state.paint;
+    if (P.tool === "select") { pending = { kind: "select", pt, x: e.clientX, y: e.clientY }; return; }   // acts on release, so a pinch never selects
+    const mask = p.masks[P.id], snap = mask.slice(); P.undo.push(snap); if (P.undo.length > 12) P.undo.shift(); P.lastSel = null;
+    const rect = mainC.getBoundingClientRect();
+    stroke = { last: pt, snap, r: Math.max(1.5, P.size * p.base.width / rect.width), erase: P.tool === "erase", raf: 0, seed: null };
+    paintTo(pt);
     return;
   }
-  if (state.tapMode) {
-    if (e.target.closest(".tapbar")) return;
-    const pt = canvasPoint(e); if (pt) handleTap(pt);
-    return;
-  }
+  if (state.tapMode) { if (pt) pending = { kind: "tap", pt, x: e.clientX, y: e.clientY }; return; }
+  if (view.z > 1) pan = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty, moved: false };
   if (e.target === mainC) showOrig(true);
 });
 stage.addEventListener("pointermove", e => {
-  if (!stroke) return;
-  const r = mainC.getBoundingClientRect();
-  paintTo({ x: clamp01((e.clientX - r.left) / r.width), y: clamp01((e.clientY - r.top) / r.height) });
+  ringAt(e);
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && ptrs.size >= 2) {
+    const [a, b] = [...ptrs.values()];
+    zoomTo(pinch.z0 * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0, (a.x + b.x) / 2, (a.y + b.y) / 2, pinch.u);
+    return;
+  }
+  if (stroke) {
+    const r = mainC.getBoundingClientRect();
+    paintTo({ x: clamp01((e.clientX - r.left) / r.width), y: clamp01((e.clientY - r.top) / r.height) });
+    return;
+  }
+  if (pending && Math.hypot(e.clientX - pending.x, e.clientY - pending.y) > 12) pending = null;   // a drag isn't a tap
+  if (pan) {
+    const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+    if (!pan.moved && Math.hypot(dx, dy) > 8) { pan.moved = true; if (state.showOriginal) showOrig(false); }
+    if (pan.moved) { view.tx = pan.tx + dx; view.ty = pan.ty + dy; clampView(); }
+  }
 });
-["pointerup", "pointercancel", "pointerleave"].forEach(t => stage.addEventListener(t, () => {
-  if (stroke && t !== "pointerleave") { stroke = null; const p = curPhoto(); if (p && state.paint) finishOp(p); }
+function pointerEnd(e) {
+  if (!ptrs.delete(e.pointerId)) return;
+  if (ptrs.size < 2) pinch = null;
+  if (ptrs.size === 0) locked = false;
+  if (e.type === "pointerup" && pending) {
+    const pd = pending; pending = null;
+    if (pd.kind === "select" && state.paint) {
+      const p = curPhoto(), P = state.paint, mask = p.masks[P.id], before = mask.slice();
+      P.undo.push(before); if (P.undo.length > 12) P.undo.shift();
+      const added = smartSelect(p, pd.pt, P.tol, mask); P.lastSel = { pt: pd.pt, before };
+      finishOp(p); renderPanel();
+      if (added < 30) toast("Only a tiny area was picked. Raise “How similar” or use Brush.");
+    }
+    if (pd.kind === "tap" && state.tapMode) handleTap(pd.pt);
+  }
+  pending = null;
+  if (stroke) { stroke = null; const p = curPhoto(); if (p && state.paint) { finishOp(p); renderPanel(); } }
+  pan = null;
   if (state.showOriginal) showOrig(false);
-}));
+}
+["pointerup", "pointercancel"].forEach(t => stage.addEventListener(t, pointerEnd));
+stage.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") $("#ring").hidden = true; });
+stage.addEventListener("wheel", e => {
+  if (state.view !== "edit") return;
+  e.preventDefault();
+  if (!e.ctrlKey && !e.metaKey && view.z > 1 && Math.abs(e.deltaY) < 40) {   // two-finger trackpad scroll pans
+    view.tx -= e.deltaX; view.ty -= e.deltaY; clampView(); return;
+  }
+  zoomTo(view.z * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0015)), e.clientX, e.clientY, photoOffset(e.clientX, e.clientY));
+}, { passive: false });
+// Safari sends trackpad pinches (Mac) and two-finger touches (iPhone) as gesture events; on iPhone pointers already handle it.
+let gz = null;
+stage.addEventListener("gesturestart", e => { e.preventDefault(); if (!ptrs.size && state.view === "edit") gz = { z0: view.z, u: photoOffset(e.clientX, e.clientY) }; });
+stage.addEventListener("gesturechange", e => { e.preventDefault(); if (gz && !ptrs.size) zoomTo(gz.z0 * e.scale, e.clientX, e.clientY, gz.u); });
+stage.addEventListener("gestureend", e => { e.preventDefault(); gz = null; });
 
 function handleTap(pt) {
   const mode = state.tapMode, p = curPhoto(); setTapMode(null); if (!p) return;
@@ -975,7 +1164,7 @@ function handleTap(pt) {
 }
 
 /* ---------- panel ---------- */
-const TABS = [["looks", "Looks"], ["light", "Light"], ["colors", "Colors"], ["adjust", "Adjust"], ["frame", "Frame"], ["recipes", "Recipes"]];
+const TABS = [["colors", "Colors"], ["light", "Feel"], ["looks", "Looks"], ["adjust", "Adjust"], ["frame", "Frame"], ["recipes", "Recipes"]];
 const presetCanvases = {};
 function renderTabs() {
   const t = $("#tabs"); t.replaceChildren();
@@ -1009,7 +1198,23 @@ function statusFor(t) {
   const was = h("span", { class: "sw", title: "In this photo" }); was.style.background = labHex(f.L, f.A, f.B);
   return [was, "→", target, h("span", { class: "pill ok", text: f.how === "tap" ? "From your tap" : "Found" })];
 }
+// What the painted object averages out to right now, next to your shade, so you can see it's exact.
+function refreshChecks() {
+  const els = document.querySelectorAll("[data-check]"), p = curPhoto(); if (!els.length || !p?.out) return;
+  for (const el of els) {
+    const t = state.recipe.palette.find(x => x.id === el.dataset.check), mk = p.soft?.[t?.id];
+    if (!t || !mk) { el.replaceChildren(); continue; }
+    const o = p.out.data; let L = 0, A = 0, B = 0, c = 0;
+    for (let j = 0; j < mk.length; j += 3) { if (mk[j] < 230) continue; const i = j * 4; rgb2lab(o[i] / 255, o[i + 1] / 255, o[i + 2] / 255); L += LAB[0]; A += LAB[1]; B += LAB[2]; c++; }
+    if (!c) { el.replaceChildren(); continue; }
+    const T = hexLab(t.hex), dE = Math.hypot(L / c - T.L, A / c - T.A, B / c - T.B) * 100, now = h("span", { class: "sw" }), want = h("span", { class: "sw" });
+    now.style.background = labHex(L / c, A / c, B / c); want.style.background = t.hex;
+    el.replaceChildren(now, "≈", want, h("span", { class: "pill " + (dE < 3 ? "ok" : "warn"), text: dE < 3 ? "Exact shade" : "Off by " + dE.toFixed(0) }),
+      h("span", { text: dE < 3 ? "Averages to " + t.hex.toUpperCase() + " with its shading kept." : "Raise Strength or Exact lightness to land on your shade." }));
+  }
+}
 function refreshStatus() {
+  refreshChecks();
   if (state.tab !== "colors") return;
   for (const el of document.querySelectorAll("[data-status]")) {
     const t = state.recipe.palette.find(x => x.id === el.dataset.status); if (t) el.replaceChildren(...statusFor(t));
@@ -1032,9 +1237,10 @@ function colorCard(t) {
     h("div", { class: "chead" }, sw, name, hex),
     h("div", { class: "row" },
       h("button", { class: "btn small primary", disabled: !t.on, text: p?.masks?.[t.id] ? "Edit painted area" : "Paint something " + lower, onclick: () => startPaint(t.id) }),
-      p?.masks?.[t.id] && h("button", { class: "btn ghost small", text: "Remove paint", onclick: () => { delete p.masks[t.id]; delete p.soft[t.id]; scheduleRender(); renderPanel(); } }),
+      p?.masks?.[t.id] && h("button", { class: "btn ghost small", text: "Remove paint", onclick: () => { delete p.masks[t.id]; delete p.soft[t.id]; delete p.edge?.[t.id]; scheduleRender(); renderPanel(); } }),
       p?.masks?.[t.id] && h("span", { class: "pill ok", text: "Painted" }),
-      on));
+      on),
+    p?.masks?.[t.id] && t.on && h("div", { class: "status", "data-check": t.id }));
   // Marker painted in Procreate / Photoshop
   const mk = h("input", { type: "color", id: "mk-" + t.id, value: t.marker, "aria-label": "Marker color for " + t.name, style: "width:32px;height:32px;border:0;padding:0;background:none" });
   mk.addEventListener("input", () => { t.marker = mk.value; scheduleRender(); renderPanel(); });
@@ -1063,15 +1269,16 @@ function colorCard(t) {
   card.append(h("details", { class: "more" }, h("summary", { text: "Fine-tune" }),
     slider({ id: "rg-" + t.id, label: "How wide a range of shades", min: 10, max: 60, def: 25, get: () => t.range, set: v => { t.range = v; }, fmt: v => v + "°" }),
     slider({ id: "st-" + t.id, label: "Strength", min: 0, max: 100, def: 100, get: () => t.strength, set: v => { t.strength = v; }, fmt: v => v + "%" }),
-    slider({ id: "li-" + t.id, label: "Match its lightness too", min: 0, max: 100, def: 60, get: () => t.light, set: v => { t.light = v; }, fmt: v => v + "%" }),
-    h("p", { class: "note", text: "Lower lightness keeps the object's own light and shadow. 100% makes it exactly your shade." }),
+    slider({ id: "li-" + t.id, label: "Exact lightness", min: 0, max: 100, def: 100, get: () => t.light, set: v => { t.light = v; }, fmt: v => v + "%" }),
+    h("p", { class: "note", text: "At 100% the object averages out to exactly your shade, with its own light, shadow and texture kept. Lower lets it stay nearer its original brightness." }),
     h("div", { class: "row" },
       h("button", { class: "btn ghost small", text: "Copy this shade from the photo", onclick: () => setTapMode({ kind: "eyedrop", id: t.id, text: "Tap the exact shade you want to use for " + (t.name || "this color").toLowerCase() }) }),
       h("button", { class: "btn ghost small", text: "Remove color", style: "color:var(--danger)", onclick: () => { state.recipe.palette = state.recipe.palette.filter(x => x !== t); scheduleRender(); renderPanel(); } }))));
   return card;
 }
 
-function renderPanel() {
+function renderPanel() { renderPanelBody(); refreshChecks(); }
+function renderPanelBody() {
   const panel = $("#panel"); panel.replaceChildren(); panel.setAttribute("aria-labelledby", "tab-" + state.tab);
   const r = state.recipe, p = curPhoto();
   if (state.paint && p) {
@@ -1085,15 +1292,19 @@ function renderPanel() {
         h("div", { class: "row" }, sw, h("strong", { text: "Painting " + (t.name || "this color").toLowerCase() }), h("span", { class: "note", text: "· " + p.name })),
         h("p", { class: "note", text: P.tool === "select"
           ? "Tap the object. Tap again to add more of it. Taps on similar colors spread across the whole object."
-          : P.tool === "brush" ? "Drag over parts the tap missed." : "Drag over anything that shouldn't change." }),
+          : P.tool === "brush" ? "Drag over parts the tap missed." : "Drag over anything that shouldn't change, like a spill onto the background." }),
         tools,
-        P.tool === "select"
-          ? slider({ id: "p-tol", label: "How similar", min: 3, max: 30, def: 10, get: () => P.tol, set: v => { P.tol = v; } })
-          : slider({ id: "p-size", label: "Brush size", min: 4, max: 80, def: 22, get: () => P.size, set: v => { P.size = v; } }),
+        P.tool !== "select" && slider({ id: "p-size", label: "Brush size", min: 4, max: 80, def: 22, get: () => P.size, set: v => { P.size = v; } }),
+        P.tool !== "select" && h("label", { class: "check" }, h("input", { type: "checkbox", id: "p-smart", checked: P.smart, onchange: e => { P.smart = e.target.checked; renderPanel(); } }),
+          P.tool === "erase" ? "Smart erase: only remove the color under the brush" : "Smart brush: stop at the object's edges"),
+        (P.tool === "select" || P.smart) && slider({ id: "p-tol", label: "How similar", min: 3, max: 30, def: 10, get: () => P.tol, set: v => { P.tol = v; if (P.tool === "select") reselect(); } }),
+        P.tool === "select" && P.lastSel && h("p", { class: "note", text: "Slide “How similar” to grow or shrink the area you just tapped." }),
+        h("p", { class: "note", text: "Pinch (or ⌘/Ctrl-scroll) to zoom in on edges. Smart brush and erase snap to the object's real outline." }),
+        h("div", { class: "status", "data-check": t.id }),
         h("label", { class: "check" }, h("input", { type: "checkbox", id: "p-show", checked: P.show, onchange: e => { P.show = e.target.checked; drawOverlay(); } }), "Show the selected area"),
         h("div", { class: "row" },
-          h("button", { class: "btn small", text: "Undo", disabled: !P.undo.length, onclick: () => { const prev = P.undo.pop(); if (prev) { p.masks[P.id] = prev; finishOp(p); renderPanel(); } } }),
-          h("button", { class: "btn ghost small", text: "Clear", onclick: () => { P.undo.push(p.masks[P.id].slice()); p.masks[P.id].fill(0); finishOp(p); renderPanel(); } }),
+          h("button", { class: "btn small", text: "Undo", disabled: !P.undo.length, onclick: () => { const prev = P.undo.pop(); if (prev) { p.masks[P.id] = prev; P.lastSel = null; finishOp(p); renderPanel(); } } }),
+          h("button", { class: "btn ghost small", text: "Clear", onclick: () => { P.undo.push(p.masks[P.id].slice()); p.masks[P.id].fill(0); P.lastSel = null; finishOp(p); renderPanel(); } }),
           h("button", { class: "btn primary small", text: "Done", onclick: endPaint }))));
       return;
     }
@@ -1121,16 +1332,17 @@ function renderPanel() {
       slider({ id: "n-exp", label: "Brightness", min: -100, max: 100, get: () => p.nudge.exposure, set: v => { p.nudge.exposure = v; } }),
       slider({ id: "n-temp", label: "Warmth", min: -100, max: 100, track: TEMP_TRACK, get: () => p.nudge.temp, set: v => { p.nudge.temp = v; } })));
     const m = r.match;
-    const sec = h("div", { class: "sec" }, h("h3", { text: "3 · Match the whole set (optional)" }),
-      h("p", { class: "note", text: "Pulls the overall brightness and color of every photo toward one reference, so the grid feels like one set. Use your favorite finished photo, or upload an old post." }),
+    const sec = h("div", { class: "sec" }, h("h3", { text: "3 · Match the feel of the set (optional)" }),
+      h("p", { class: "note", text: "Gently pulls the brightness, contrast and color cast of every photo toward one feel, so shots from sunny, shady and indoor light sit together in the grid. It stays subtle, and your painted shades are never changed by it." }),
       h("div", { class: "row" },
+        state.photos.length > 1 && h("button", { class: "btn small primary", text: "Even out all photos", onclick: evenOut }),
         h("button", { class: "btn small", text: "Match to this photo", onclick: matchCurrent }),
         h("label", { class: "btn small", for: "refIn", text: "Upload a reference" }),
         h("input", { id: "refIn", type: "file", accept: "image/*", hidden: true, onchange: e => e.target.files[0] && matchUpload(e.target.files[0]) })));
     if (m) sec.append(
-      h("div", { class: "ref" }, h("img", { src: m.thumb, alt: "Reference" }), h("div", {}, h("strong", { text: "Reference" }), h("span", { class: "note", text: m.from })),
+      h("div", { class: "ref" }, h("img", { src: m.thumb, alt: "Reference" }), h("div", {}, h("strong", { text: "Feel reference" }), h("span", { class: "note", text: m.from })),
         h("button", { class: "btn ghost small", text: "Remove", onclick: () => { r.match = null; scheduleRender(); schedulePresetThumbs(); renderPanel(); } })),
-      slider({ id: "m-str", label: "Match strength", min: 0, max: 100, def: 75, get: () => m.strength, set: v => { m.strength = v; }, fmt: v => v + "%" }),
+      slider({ id: "m-str", label: "Match strength", min: 0, max: 100, def: 50, get: () => m.strength, set: v => { m.strength = v; }, fmt: v => v + "%" }),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "m-light", checked: m.light, onchange: e => { m.light = e.target.checked; scheduleRender(); } }), "Match brightness and contrast"),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "m-color", checked: m.color, onchange: e => { m.color = e.target.checked; scheduleRender(); } }), "Match overall color"));
     panel.append(sec);
@@ -1142,7 +1354,7 @@ function renderPanel() {
       ...r.palette.map(colorCard),
       h("div", { class: "row" },
         h("button", { class: "btn small", text: "Add a color", onclick: () => { r.palette.push(newColor("Color " + (r.palette.length + 1), "#a0704c")); scheduleRender(); renderPanel(); } }),
-        h("span", { class: "note", text: "Tap a swatch or type a hex code to set your shade." }))));
+        h("span", { class: "note", text: "Tap a swatch or type a hex code to set your shade. Your palette is saved on this device and used on every photo." }))));
   }
   if (state.tab === "adjust") {
     panel.append(
@@ -1197,10 +1409,10 @@ function renderPanel() {
     panel.append(list);
     panel.append(h("div", { class: "sec" }, h("h3", { text: "Back up" }),
       h("div", { class: "row" },
-        h("button", { class: "btn small", text: "Back up recipes", disabled: !state.recipes.length, onclick: backupRecipes }),
+        h("button", { class: "btn small", text: "Back up palette and recipes", onclick: backupRecipes }),
         h("label", { class: "btn small", for: "restoreIn", text: "Restore from a backup" }),
         h("input", { id: "restoreIn", type: "file", accept: "application/json,.json", hidden: true, onchange: e => e.target.files[0] && restoreRecipes(e.target.files[0]) })),
-      h("p", { class: "note", text: "Saves a small file with all your recipes. Keep it in Files or iCloud Drive." })));
+      h("p", { class: "note", text: "Saves a small file with your palette's exact shades and all your recipes. Keep it in Files or iCloud Drive; restoring it brings your palette back too." })));
   }
 }
 
@@ -1215,14 +1427,28 @@ function matchCurrent() {
   const p = curPhoto(); if (!p) return;
   const A = analyze(p), tmp = new ImageData(p.thumb.width, p.thumb.height);
   processImage(p.thumb, tmp, A.P, { ...A.opts, match: null, fx: false });
-  state.recipe.match = { ref: imageStats(tmp), strength: state.recipe.match?.strength ?? 75, light: true, color: true, thumb: thumbDataURL(tmp), from: p.name + ", as edited" };
+  state.recipe.match = { ref: imageStats(tmp), strength: state.recipe.match?.strength ?? 50, light: true, color: true, thumb: thumbDataURL(tmp), from: p.name + ", as edited" };
   scheduleRender(); schedulePresetThumbs(); renderPanel(); toast("Matching every photo to " + p.name);
+}
+// The reference is the average of every photo in the strip, so each one moves a little toward the middle.
+function evenOut() {
+  const all = state.photos.filter(p => p.thumb); if (!all.length) return;
+  const keys = ["mY", "mB", "mR", "sY", "sB", "sR"], ref = Object.fromEntries(keys.map(k => [k, 0]));
+  for (const p of all) {
+    const A = analyze(p), tmp = new ImageData(p.thumb.width, p.thumb.height);
+    processImage(p.thumb, tmp, A.P, { ...A.opts, match: null, palette: null, paints: null, fx: false });
+    const st = imageStats(tmp); for (const k of keys) ref[k] += st[k] / all.length;
+  }
+  const c = curPhoto(), A = analyze(c), tmp = new ImageData(c.thumb.width, c.thumb.height);
+  processImage(c.thumb, tmp, A.P, { ...A.opts, match: null, fx: false });
+  state.recipe.match = { ref, strength: state.recipe.match?.strength ?? 50, light: true, color: true, thumb: thumbDataURL(tmp), from: "The average of your " + all.length + " photos" };
+  scheduleRender(); schedulePresetThumbs(); renderPanel(); toast("Evening out the feel of all " + all.length + " photos");
 }
 async function matchUpload(file) {
   try {
     const src = await decode({ file }), [W, H] = dims(src);
     const d = drawTo(src, { x: 0, y: 0, w: W, h: H }, Math.min(1, THUMB / Math.max(W, H))).data;
-    state.recipe.match = { ref: imageStats(d), strength: state.recipe.match?.strength ?? 75, light: true, color: true, thumb: thumbDataURL(d), from: file.name };
+    state.recipe.match = { ref: imageStats(d), strength: state.recipe.match?.strength ?? 50, light: true, color: true, thumb: thumbDataURL(d), from: file.name };
     scheduleRender(); schedulePresetThumbs(); renderPanel(); toast("Matching every photo to your reference");
   } catch (e) { toast("That image couldn't be opened. Try a JPEG or PNG."); }
 }
@@ -1363,7 +1589,7 @@ async function renderExport(photo) {
   const A = analyze(photo);
   processImage(d.data, d.data, A.P, { ...A.opts, fx: true, grainScale: Math.max(1, Math.max(d.data.width, d.data.height) / 1100) });
   d.ctx.putImageData(d.data, 0, 0);
-  return await new Promise(res => d.canvas.toBlob(res, "image/jpeg", .92));
+  return await new Promise(res => d.canvas.toBlob(res, "image/jpeg", .95));
 }
 const outName = p => "safelight-" + p.name.replace(/\.[^.]+$/, "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() + ".jpg";
 const canShareFiles = files => { try { return !!(navigator.canShare && navigator.canShare({ files })); } catch (e) { return false; } };
@@ -1381,7 +1607,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") { closeSheet
 function openSaveSheet() {
   const n = state.photos.length, status = h("p", { class: "note", "aria-live": "polite" });
   const sizeSeg = h("div", { class: "chips" });
-  const paintSize = () => { sizeSeg.replaceChildren(...[["ig", "Instagram size (1080 wide)"], ["full", "Full size"]].map(([id, l]) =>
+  const paintSize = () => { sizeSeg.replaceChildren(...[["full", "Full quality"], ["ig", "Instagram size (1080 wide)"]].map(([id, l]) =>
     h("button", { class: "chip", "aria-pressed": state.size === id ? "true" : "false", text: l, onclick: () => { state.size = id; paintSize(); reset(); } }))); };
   paintSize();
   let ready = null;
@@ -1431,7 +1657,7 @@ function openSaveSheet() {
 $("#saveBtn").onclick = openSaveSheet;
 
 async function backupRecipes() {
-  const blob = new Blob([JSON.stringify({ app: "safelight", version: 1, recipes: state.recipes, transition }, null, 1)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify({ app: "safelight", version: 1, recipes: state.recipes, transition, palette: state.recipe.palette }, null, 1)], { type: "application/json" });
   const file = new File([blob], "safelight-recipes.json", { type: "application/json" });
   if (canShareFiles([file])) { try { await navigator.share({ files: [file] }); } catch (e) {} return; }
   downloadBlob(file.name, file);
@@ -1441,6 +1667,7 @@ async function restoreRecipes(file) {
     const data = JSON.parse(await file.text());
     if (!Array.isArray(data.recipes)) throw 0;
     let added = 0;
+    if (Array.isArray(data.palette) && data.palette.length) { state.recipe.palette = data.palette; upgradePalette(state.recipe.palette); persist(); scheduleRender(); }
     for (const rc of data.recipes) {
       if (!rc?.recipe || state.recipes.some(x => x.id === rc.id)) continue;
       await Store.save(rc); state.recipes.push(rc); added++;
@@ -1470,6 +1697,7 @@ $("#fileIn").addEventListener("change", async e => {
 /* ---------- boot ---------- */
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("/sw.js").catch(() => {});
 (async function boot() {
+  try { navigator.storage?.persist?.(); } catch (e) {}   // ask Safari not to clear your palette and recipes
   renderTabs();
   await loadSamples();
   renderAll();

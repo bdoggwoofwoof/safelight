@@ -2,10 +2,10 @@
 
 A personal photo editor for a consistent Instagram feed. Static web app: no build step, no server, everything runs on the phone.
 
-- **Light** — tap something white to fix mixed lighting, per-photo tweaks, Match to a reference photo
-- **Colors** — paint objects (or mark them in Procreate/Photoshop with a marker color) and they become your exact shade
+- **Colors** — tap or brush an object (or mark it in Procreate/Photoshop with a marker color) and it becomes your exact shade, keeping its own shading and texture. Smart brush/erase hug edges, edges snap to the real outline at full size, pinch to zoom. A live check shows the object averages to your hex code.
+- **Feel** — tap something white to fix mixed lighting, per-photo tweaks, and a subtle "Even out all photos" / match-to-reference that never changes your painted shades
 - **Adjust** — light, color, split tone, skin tone, grain
-- **Recipes** — save looks, back up / restore, and ease the feed back to natural over several posts
+- **Recipes** — save looks, back up / restore your palette and recipes, and ease the feed back to natural over several posts
 
 Deploy: import this repo in Vercel (framework preset "Other", no build command). Then on iPhone open the site in Safari → Share → Add to Home Screen.
 
