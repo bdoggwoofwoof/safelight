@@ -491,7 +491,9 @@ function processImage(src, dst, P, opt) {
           rgb2lab(r, g, b);
           // Recolor like real paint: the object's mean lands on your exact shade, its own light and shadow ride on top,
           // and color fades with shadow (darker = less chroma) and toward white in specular highlights.
-          const L0 = LAB[0], Lp = L0 + (t.TL + (L0 - t.Lm) * t.g - L0) * t.kl;
+          const L0 = LAB[0];
+          let Lp = L0 + (t.TL + (L0 - t.Lm) * t.g - L0) * t.kl;
+          if (Lp > .82) { const e = Lp - .82; Lp = .82 + e / (1 + e / .16); }   // roll highlights off instead of clipping to white
           const cs = Math.max(0, Math.min(1.5, Lp / t.TL)) * (1 - ss(.9, 1.02, Lp));
           lab2rgb(Lp, t.A * cs, t.B * cs);
           const k = v * t.k;
@@ -681,7 +683,8 @@ function labOf(p) {
 // and in OKLab that scales a and b along with L. So compare against the seed's color scaled to this pixel's lightness.
 function shadeDist2(lab, k, seed) {
   const L = lab[k], f = Math.max(.35, Math.min(2.5, L / Math.max(.05, seed.L)));
-  const da = lab[k + 1] - seed.A * f, db = lab[k + 2] - seed.B * f, dl = (L - seed.L) * .25;
+  // Color carries most of the weight: a brown table next to a cream shirt differs mostly in color, not brightness.
+  const da = (lab[k + 1] - seed.A * f) * 2.5, db = (lab[k + 2] - seed.B * f) * 2.5, dl = (L - seed.L) * .2;
   return da * da + db * db + dl * dl;
 }
 function labAt(p, cx, cy, rad) {
@@ -748,15 +751,24 @@ function smartSelect(p, pt, tol, mask) {
   const seen = new Uint8Array(w * hh), q = new Int32Array(w * hh);
   let head = 0, tail = 0, added = 0;
   q[tail++] = sy * w + sx; seen[sy * w + sx] = 1;
+  // Besides looking like the tapped color, each step has to be gentle: shading changes gradually, a real edge jumps.
+  // So the fill can't creep from an object's dark folds into a dark patch of the background next to it.
+  const STEP2 = (.06 + tol / 100 * .3) ** 2;
+  const go = (from, to) => {
+    if (seen[to]) return;
+    const a = from * 3, b = to * 3, dl = lab[a] - lab[b], da = lab[a + 1] - lab[b + 1], db = lab[a + 2] - lab[b + 2];
+    if (dl * dl + da * da + db * db > STEP2) return;
+    seen[to] = 1; q[tail++] = to;
+  };
   while (head < tail) {
     const idx = q[head++];
     if (shadeDist2(lab, idx * 3, seed) > T2 && head > 1) continue;
     if (mask[idx] < 255) { mask[idx] = 255; added++; }
     const x = idx % w;
-    if (x > 0 && !seen[idx - 1]) { seen[idx - 1] = 1; q[tail++] = idx - 1; }
-    if (x < w - 1 && !seen[idx + 1]) { seen[idx + 1] = 1; q[tail++] = idx + 1; }
-    if (idx >= w && !seen[idx - w]) { seen[idx - w] = 1; q[tail++] = idx - w; }
-    if (idx < w * (hh - 1) && !seen[idx + w]) { seen[idx + w] = 1; q[tail++] = idx + w; }
+    if (x > 0) go(idx, idx - 1);
+    if (x < w - 1) go(idx, idx + 1);
+    if (idx >= w) go(idx, idx - w);
+    if (idx < w * (hh - 1)) go(idx, idx + w);
   }
   return added;
 }
@@ -870,8 +882,15 @@ function cropRect(W, H, crop) {
 }
 async function decode(photo) {
   if (photo.sample) return photo.sample;
-  try { return await createImageBitmap(photo.file); }
-  catch (e) { const img = new Image(); img.src = URL.createObjectURL(photo.file); await img.decode(); return img; }
+  try { return await createImageBitmap(photo.file); } catch (e) {}
+  const url = URL.createObjectURL(photo.file);
+  try { const img = new Image(); img.src = url; await img.decode(); return img; }
+  catch (e) {
+    // Very large photos can run an iPhone out of memory at full size: fall back to a 4000-px-wide decode rather than refusing the photo.
+    URL.revokeObjectURL(url);
+    const bm = await createImageBitmap(photo.file, { resizeWidth: 4000, resizeQuality: "high" });
+    photo.reduced = true; return bm;
+  }
 }
 const dims = src => [src.naturalWidth || src.width, src.naturalHeight || src.height];
 function drawTo(src, rect, scale) {
@@ -1380,6 +1399,7 @@ function renderPanelBody() {
       ...r.palette.map(colorCard),
       h("div", { class: "row" },
         h("button", { class: "btn small", text: "Add a color", onclick: () => { r.palette.push(newColor("Color " + (r.palette.length + 1), "#a0704c")); scheduleRender(); renderPanel(); } }),
+        h("button", { class: "btn small ghost", text: "Send palette to another device", onclick: sharePalette }),
         h("span", { class: "note", text: "Tap a swatch or type a hex code to set your shade. Your palette is saved on this device and used on every photo." }))));
   }
   if (state.tab === "adjust") {
@@ -1664,7 +1684,7 @@ function openSaveSheet() {
       try { files.push(new File([await renderExport(list[i], f => { status.textContent = `${label}… ${Math.round(f * 100)}%`; })], nm, { type: "image/jpeg" })); }
       catch (e) { status.textContent = "Couldn't render " + list[i].name + ". Try Instagram size."; go.querySelectorAll("button").forEach(b => b.disabled = false); return; }
     }
-    ready = files; status.textContent = ""; paintGo();
+    ready = files; status.textContent = list.some(p => p.reduced) ? "Some photos were too large for this device to open at full size, so they're saved at 4000 px wide." : ""; paintGo();
   };
   const save = async () => {
     const files = ready;
@@ -1699,6 +1719,37 @@ function openSaveSheet() {
 }
 $("#saveBtn").onclick = openSaveSheet;
 
+// A link that carries your exact shades: open it on your other phone or laptop to use the same palette there.
+async function sharePalette() {
+  const data = state.recipe.palette.map(t => [t.name, t.hex, t.light, t.strength]);
+  const url = location.origin + "/#palette=" + encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(data)))));
+  try { if (navigator.share) { await navigator.share({ title: "My Safelight palette", url }); return; } } catch (e) { if (e?.name === "AbortError") return; }
+  try { await navigator.clipboard.writeText(url); toast("Palette link copied. Open it on your other device."); }
+  catch (e) { openSheet([h("h2", { text: "Your palette link" }), h("input", { class: "field", value: url, readonly: true, onfocus: ev => ev.target.select() }),
+    h("button", { class: "btn ghost", text: "Close", onclick: closeSheet })]); }
+}
+function paletteFromLink() {
+  const m = location.hash.match(/^#palette=(.+)$/); if (!m) return;
+  history.replaceState(null, "", location.pathname);
+  let list; try { list = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1]))))); } catch (e) { toast("That palette link is damaged."); return; }
+  list = (Array.isArray(list) ? list : []).filter(x => Array.isArray(x) && /^#[0-9a-f]{6}$/i.test(x[1]));
+  if (!list.length) return;
+  const sw = list.map(([, hex]) => { const d = h("span", { class: "sw" }); d.style.background = hex; return d; });
+  openSheet([h("h2", { text: "Use this palette?" }), h("div", { class: "row" }, sw),
+    h("p", { class: "note", text: list.map(x => x[0] + " " + x[1].toUpperCase()).join(" · ") }),
+    h("p", { class: "note", text: "It replaces the palette on this device. Painted areas stay painted and take on the new shades." }),
+    h("div", { class: "stack" },
+      h("button", { class: "btn primary", text: "Use this palette", onclick: () => {
+        const old = state.recipe.palette;
+        state.recipe.palette = list.map(([name, hex, light, strength], i) => {
+          const keep = old.find(t => t.name === name) || old[i];   // keep ids so painted areas stay linked
+          return { ...(keep || newColor(String(name || "Color " + (i + 1)), hex, MARKERS[i % 3])), name: String(name || "Color " + (i + 1)).slice(0, 20), hex: hex.toLowerCase(),
+            light: Number.isFinite(light) ? light : 100, strength: Number.isFinite(strength) ? strength : 100, on: true };
+        });
+        upgradePalette(state.recipe.palette); persist(); closeSheet(); scheduleRender(); renderPanel(); toast("Palette updated");
+      } }),
+      h("button", { class: "btn ghost", text: "Not now", onclick: closeSheet }))]);
+}
 async function backupRecipes() {
   const blob = new Blob([JSON.stringify({ app: "safelight", version: 1, recipes: state.recipes, transition, palette: state.recipe.palette }, null, 1)], { type: "application/json" });
   const file = new File([blob], "safelight-recipes.json", { type: "application/json" });
@@ -1801,6 +1852,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
   if (restored.length) { state.photos = restored; toast(`Welcome back: ${restored.length} photo${restored.length > 1 ? "s" : ""} restored`); }
   else await loadSamples();
   renderAll();
+  paletteFromLink();
   state.recipes = await Store.list();
   if (state.tab === "recipes") renderPanel();
   await Store.init();
